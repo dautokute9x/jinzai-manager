@@ -165,7 +165,7 @@
       }
     </style>
   </head>
-  <body data-token="<?= token ?>" data-role="<?= role ?>" data-who="<?= who ?>" data-perms="<?= perms ?>" data-env="<?= env ?>">
+  <body data-token="<?= token ?>" data-role="<?= role ?>" data-who="<?= who ?>" data-perms="<?= perms ?>" data-env="<?= env ?>" data-url="<?= url ?>">
     <? if (env !== 'PROD') { ?><div class="banner" data-i18n="ui.banner"></div><? } ?>
     <header class="topbar">
       <button type="button" class="menu-btn" id="menuBtn" aria-controls="nav" aria-expanded="false" data-i18n-label="ui.menu">
@@ -230,6 +230,7 @@
     <?!= include('DocsUi'); ?>
     <?!= include('PrepUi'); ?>
     <?!= include('MendanUi'); ?>
+    <?!= include('LoginUi'); ?>
     <script>
       const CHOICES = <?!= choices ?>;
       const LANG_KEY = 'hrTokutei.lang';
@@ -249,6 +250,7 @@
         document.querySelectorAll('[data-page]').forEach((b) => {
           if (b.dataset.page === page) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
         });
+        if (authScreen()) return; // GĐ 12.1: chưa đăng nhập / phải đổi mật khẩu / đã đăng xuất (LoginUi.html)
         document.getElementById('pageTitle').textContent = t('nav.' + page);
         if (page === 'settings') renderSettings();
         else if (page === 'home') renderHome();
@@ -280,12 +282,12 @@
         if (m) { const v = JSON.parse(m[1]); return fmt('val.' + v.code, { field: t('field.' + v.field), max: v.max, min: v.min, ma: v.ma }); }
         m = msg.match(/SCHEMA_MISMATCH\|(\w+)/);
         if (m) return fmt('err.schema', { table: m[1] });
-        m = msg.match(/\b(CONFLICT|NOT_FOUND|NOT_INITIALIZED|BACKUP_INCOMPLETE|FORBIDDEN|DEMO_DONE|DEMO_TEST_ONLY|PERF_TEST_ONLY|BUSY|XLSX_UNSUPPORTED|XLSX_BAD)\b/);
+        m = msg.match(/\b(CONFLICT|NOT_FOUND|NOT_INITIALIZED|BACKUP_INCOMPLETE|FORBIDDEN|DEMO_DONE|DEMO_TEST_ONLY|PERF_TEST_ONLY|BUSY|XLSX_UNSUPPORTED|XLSX_BAD|LOGIN_FAILED|LOCKED)\b/);
         if (m) return t('err.' + m[1]);
         return fmt('setup.err.other', { msg: msg });
       }
 
-      // GĐ 10 (D-075): mở bằng liên kết riêng (?k=…) → mọi lần gọi đi qua api(token, …); chủ mở trực tiếp thì gọi thẳng.
+      // GĐ 12.1 (D-083): nhân viên đăng nhập (role 'login' → màn hình đăng nhập) → mọi lần gọi đi qua api(token, …); chủ mở trực tiếp thì gọi thẳng.
       // Template chưa thay (chạy ngoài Apps Script) → coi như chủ.
       const ACCESS = (() => {
         const d = document.body.dataset;
@@ -301,7 +303,10 @@
       // Gọi hàm server; ngoài Apps Script (không có google.script.run) thì báo lỗi thay vì treo.
       function runServer(fn, args, onOk, onErr) {
         if (!(window.google && google.script && google.script.run)) { onErr(errorText('google.script.run unavailable')); return; }
-        const r = google.script.run.withSuccessHandler(onOk).withFailureHandler((e) => onErr(errorText(e), e));
+        const r = google.script.run.withSuccessHandler(onOk).withFailureHandler((e) => {
+          if (ACCESS.token && /SESSION_EXPIRED/.test(String((e && e.message) || e))) { endSession('auth.expired'); return; } // hết phiên giữa chừng
+          onErr(errorText(e), e);
+        });
         if (ACCESS.token) r.api(ACCESS.token, fn, args); else r[fn].apply(null, args);
       }
 
@@ -369,6 +374,7 @@
       }));
       document.querySelectorAll('[data-page]').forEach((b) => b.addEventListener('click', () => {
         page = b.dataset.page;
+        if (!auth.forced) auth.screen = null; // rời màn hình đổi mật khẩu (GĐ 12.1)
         setMenu(false);
         render();
         if (page === 'settings' && isOwnerUi && !setup.status && !setup.busy) loadStatus();
@@ -397,8 +403,6 @@
       function tick() { document.getElementById('clock').textContent = new Date().toLocaleString('sv-SE', clockFmt); }
       tick();
       setInterval(tick, 1000);
-      render();
-      loadDashboard(); // trang mở đầu là Tổng quan
       // Code mới cần cấu trúc mới (SCHEMA) mà file Sheets chưa nâng cấp → nhắc bấm Khởi tạo ngay khi mở app, trên mọi trang.
       const SCHEMA = Number('<?= schema ?>') || 0;
       function showUpgrade(s) {
@@ -412,13 +416,19 @@
         go.addEventListener('click', () => { page = 'settings'; render(); if (!setup.busy) runInit(); window.scrollTo(0, 0); });
         box.append(go);
       }
-      if (isOwnerUi) runServer('getSetupStatus', [], showUpgrade, () => {}); // chỉ chủ nâng cấp được
-      // GĐ 10: nhân viên không thấy Doanh số / Hóa đơn / Cài đặt; hiện tên người đang dùng liên kết.
-      const hideNav = { sales: !(can('doanh_so') || can('doanh_so_minh')), invoice: !can('hoa_don'), settings: !(can('cai_dat') || can('nhap_xuat')) };
-      Object.keys(hideNav).forEach((p) => { const b = document.querySelector('[data-page="' + p + '"]'); if (b) b.hidden = hideNav[p]; });
-      if (ACCESS.who) { const w = document.getElementById('whoBox'); w.hidden = false; w.textContent = ACCESS.who + ' · ' + t('role.' + ACCESS.role); }
+      // Chạy khi đã vào được app: chủ ngay lúc mở; nhân viên sau khi đăng nhập (LoginUi.html → startSession).
+      function startApp() {
+        render();
+        loadDashboard(); // trang mở đầu là Tổng quan
+        if (isOwnerUi) runServer('getSetupStatus', [], showUpgrade, () => {}); // chỉ chủ nâng cấp được
+        // GĐ 10: nhân viên không thấy Doanh số / Hóa đơn / Cài đặt khi không có quyền; hiện tên người đang đăng nhập.
+        const hideNav = { sales: !(can('doanh_so') || can('doanh_so_minh')), invoice: !can('hoa_don'), settings: !(can('cai_dat') || can('nhap_xuat')) };
+        Object.keys(hideNav).forEach((p) => { const b = document.querySelector('[data-page="' + p + '"]'); if (b) b.hidden = hideNav[p]; });
+        if (ACCESS.who) renderWhoBox();
+      }
       // Bước 1.6: thời gian từ lúc khung app bắt đầu tải tới khi hiển thị xong (không gồm khung ngoài của Google).
       const appLoadMs = Math.round(performance.now());
+      if (ACCESS.role === 'login') resumeOrLogin(); else startApp();
     </script>
   </body>
 </html>

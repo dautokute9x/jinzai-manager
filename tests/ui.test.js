@@ -46,12 +46,13 @@ const html = src('Index.html')
   .replace('<?= appName ?>', 'HR Tokutei')
   .replace('<?= version ?>', '0.2.0');
 
-function open(storage = {}, server = null, page = html) {
+function open(storage = {}, server = null, page = html, session = {}) {
   const dom = new JSDOM(page, {
     runScripts: 'dangerously',
     url: 'https://example.test/',
     beforeParse(w) {
       Object.entries(storage).forEach(([k, v]) => w.localStorage.setItem(k, v));
+      Object.entries(session).forEach(([k, v]) => w.sessionStorage.setItem(k, v));
       if (server) w.google = { script: { get run() { return fakeRun(server); } } };
     },
   });
@@ -1464,7 +1465,7 @@ const d21 = w21.document;
 assert(apiCalls.length && apiCalls.every((c) => c[0] === 'tok123abc'), 'mọi lần gọi kèm token qua api');
 eq(['sales', 'invoice', 'settings'].map((p) => d21.querySelector('[data-page="' + p + '"]').hidden), [true, true, true]);
 assert(!d21.querySelector('[data-page="company"]').hidden);
-assert.strictEqual(d21.getElementById('whoBox').textContent, 'NV Giả · Nhân viên');
+assert.match(d21.getElementById('whoBox').textContent, /^NV Giả · Nhân viên Đổi mật khẩuĐăng xuất$/);
 d21.querySelector('[data-page="company"]').click();
 d21.getElementById('pageBody').querySelector('.link-btn').click();
 assert(!d21.querySelector('section[aria-labelledby="ct-h"]'), 'không có mục hợp đồng & phí');
@@ -1475,7 +1476,7 @@ assert(!Array.from(g32DocsBox.querySelectorAll('button')).some((b) => b.textCont
 assert.match(g32DocsBox.textContent, /\*\*\*\*4321/);
 w21.close();
 
-// 33. GĐ 10: chủ cấp / thu hồi liên kết, đổi vai trò trong Cài đặt → Nhân viên; liên kết chỉ hiện một lần.
+// 33. GĐ 10 + 12.1: chủ đặt mật khẩu tạm / khóa đăng nhập, đổi vai trò trong Cài đặt → Nhân viên; mật khẩu tạm chỉ hiện một lần.
 const acCalls = [];
 let acRows = [{ id: 's1', ma: 'STF-0001', ho_ten: 'NV Giả', trang_thai: 'dang_lam', vai_tro: 'nhan_vien', khoa_luc: '', sua_luc: 'x', da_an: '' },
   { id: 's2', ma: 'STF-0002', ho_ten: 'Nghỉ Giả', trang_thai: 'da_nghi', vai_tro: 'nhan_vien', khoa_luc: '', sua_luc: 'x', da_an: '' }];
@@ -1485,7 +1486,7 @@ const w22 = open({}, {
   listRecords: (table) => (table === 'STAFF' ? acRows.map((r) => Object.assign({}, r)) : []),
   getTaskSettings: () => ({}), getChecklistTemplates: () => ({ nintei: { ids: [], custom: false, sua_luc: '' } }), getFinanceSettings: () => ({ tax: 10, sua_luc: '' }),
   getImportFields: () => ({ STAFF: [], COMPANY: [], CONTACT: [], JOB_ORDER: [], PERSON: [] }),
-  issueAccessLink: (id) => { acCalls.push(['issue', id]); acRows[0].khoa_luc = '2026-11-01 09:00:00'; return { token: 'abc', url: 'https://script.example.test/exec?k=abc' }; },
+  setStaffPassword: (id) => { acCalls.push(['issue', id]); acRows[0].khoa_luc = '2026-11-01 09:00:00'; return { id: 'STF-0001', password: 'abc123def456' }; },
   revokeAccess: (id) => { acCalls.push(['revoke', id]); acRows[0].khoa_luc = ''; },
   updateRecord: (table, id, data, sl) => { acCalls.push(['update', table, id, Object.assign({}, data)]); },
 });
@@ -1493,17 +1494,17 @@ const d22 = w22.document;
 d22.querySelector('[data-page="settings"]').click();
 const stBox = () => d22.querySelector('section[aria-labelledby="staff-h"]');
 const stRows = () => Array.from(stBox().querySelectorAll('tbody tr'));
-assert.match(stRows()[0].textContent, /Chưa cấp/);
-assert(!Array.from(stRows()[1].querySelectorAll('button')).some((b) => b.textContent === 'Tạo liên kết'), 'người đã nghỉ: không cấp');
-stRows()[0].querySelector('button[aria-label="Tạo liên kết NV Giả"]').click();
+assert.match(stRows()[0].textContent, /Chưa có mật khẩu/);
+assert(!Array.from(stRows()[1].querySelectorAll('button')).some((b) => b.textContent === 'Đặt mật khẩu'), 'người đã nghỉ: không đặt');
+stRows()[0].querySelector('button[aria-label="Đặt mật khẩu NV Giả"]').click();
 eq(acCalls.slice(-1)[0], ['issue', 's1']);
-assert.strictEqual(stBox().querySelector('input[aria-label="Liên kết truy cập"]').value, 'https://script.example.test/exec?k=abc');
-assert.match(stRows()[0].textContent, /Đã cấp 2026-11-01 09:00/);
+assert.strictEqual(stBox().querySelector('input[aria-label="Thông tin đăng nhập"]').value, 'ID: STF-0001  /  Mật khẩu: abc123def456');
+assert.match(stRows()[0].textContent, /Đặt mật khẩu 2026-11-01 09:00/);
 Array.from(stBox().querySelectorAll('button')).find((b) => b.textContent === 'Đã sao chép, ẩn đi').click();
-assert(!stBox().querySelector('input[aria-label="Liên kết truy cập"]'), 'liên kết chỉ hiện một lần');
+assert(!stBox().querySelector('input[aria-label="Thông tin đăng nhập"]'), 'mật khẩu tạm chỉ hiện một lần');
 const roleSel = stRows()[0].querySelector('select'); roleSel.value = 'quan_ly'; roleSel.dispatchEvent(new w22.Event('change'));
 eq(acCalls.slice(-1)[0], ['update', 'STAFF', 's1', { vai_tro: 'quan_ly' }]);
-stRows()[0].querySelector('button[aria-label="Thu hồi NV Giả"]').click();
+stRows()[0].querySelector('button[aria-label="Khóa đăng nhập NV Giả"]').click();
 eq(acCalls.slice(-1)[0], ['revoke', 's1']);
 w22.close();
 
@@ -1765,7 +1766,68 @@ assert.match(b30().textContent, /定期面談から.*対応履歴/);
 d30.querySelector('[data-lang="vi"]').click();
 w30.close();
 
-console.log('OK — 38 nhóm kiểm tra giao diện đạt');
+
+// 39. GĐ 12.1 (D-083): màn hình đăng nhập → bắt đổi mật khẩu tạm → vào app; đăng xuất; tải lại trang giữ phiên; hết phiên giữa chừng.
+const loginPage = html.replace('data-token="<?= token ?>" data-role="<?= role ?>" data-who="<?= who ?>" data-perms="<?= perms ?>" data-env="<?= env ?>" data-url="<?= url ?>"',
+  'data-token="" data-role="login" data-who="" data-perms="null" data-env="TEST" data-url="https://script.example.test/exec"');
+assert(loginPage !== html, 'thay được thuộc tính body');
+const g39 = [];
+const srv39 = {
+  login: (id, pw) => { g39.push(['login', id]); if (pw !== 'TamThoi1234') throw new Error('LOGIN_FAILED'); return { token: 'tokL', role: 'nhan_vien', who: 'NV Đăng Nhập', ma: 'STF-0001', perms: permsNv, mustChange: true }; },
+  resumeSession: (tok) => { g39.push(['resume', tok]); if (tok !== 'tokL') throw new Error('SESSION_EXPIRED'); return { role: 'nhan_vien', who: 'NV Đăng Nhập', ma: 'STF-0001', perms: permsNv, mustChange: false }; },
+  logout: (tok) => { g39.push(['logout', tok]); return true; },
+  api: (tok, fn, args) => { g39.push([tok, fn]); if (fn === 'changeMyPassword') return true; if (srv39.expired) throw new Error('SESSION_EXPIRED'); if (!staffInner[fn]) throw new Error('FORBIDDEN|' + fn); return staffInner[fn](...args); },
+};
+const w39 = open({}, srv39, loginPage);
+w39.scrollTo = () => {};
+const d39 = w39.document;
+const type39 = (label, v) => { const i = Array.from(d39.querySelectorAll('#pageBody label')).find((l) => l.textContent.indexOf(label) === 0).querySelector('input'); i.value = v; i.dispatchEvent(new w39.Event('input')); };
+const submit39 = () => d39.querySelector('#pageBody button[type="submit"]').click();
+eq([d39.getElementById('pageTitle').textContent, d39.getElementById('nav').hidden, g39.length], ['Đăng nhập', true, 0]);
+type39('ID', 'STF-0001'); type39('Mật khẩu', 'sai'); submit39();
+assert.match(d39.getElementById('pageBody').querySelector('.msg-err').textContent, /Sai ID hoặc mật khẩu/);
+type39('Mật khẩu', 'TamThoi1234'); submit39();
+eq([d39.getElementById('pageTitle').textContent, d39.getElementById('nav').hidden], ['Đổi mật khẩu', true]);
+assert.match(d39.getElementById('pageBody').textContent, /mật khẩu tạm/);
+assert(!Array.from(d39.querySelectorAll('#pageBody button')).some((b) => b.textContent === 'Hủy'), 'bắt buộc đổi: không có Hủy');
+type39('Mật khẩu hiện tại', 'TamThoi1234'); type39('Mật khẩu mới', 'MatKhau-2026'); type39('Nhập lại', 'khac'); submit39();
+assert.match(d39.getElementById('pageBody').querySelector('.msg-err').textContent, /không khớp/);
+type39('Nhập lại', 'MatKhau-2026'); submit39();
+assert(g39.some((c) => c[0] === 'tokL' && c[1] === 'changeMyPassword'), 'đổi mật khẩu qua api với token phiên');
+assert(g39.some((c) => c[0] === 'tokL' && c[1] === 'getDashboard'), 'vào app: gọi Tổng quan bằng token phiên');
+eq([d39.getElementById('pageTitle').textContent, d39.getElementById('nav').hidden, w39.sessionStorage.getItem('hrTokutei.session')], ['Tổng quan', false, 'tokL']);
+assert.match(d39.getElementById('whoBox').textContent, /^NV Đăng Nhập · Nhân viên/);
+eq(['sales', 'invoice', 'settings'].map((p) => d39.querySelector('[data-page="' + p + '"]').hidden), [false, true, true]);
+// Tự đổi mật khẩu (không bắt buộc): có Hủy; bấm menu là rời màn hình.
+Array.from(d39.querySelectorAll('#whoBox button')).find((b) => b.textContent === 'Đổi mật khẩu').click();
+eq(d39.getElementById('pageTitle').textContent, 'Đổi mật khẩu');
+assert(Array.from(d39.querySelectorAll('#pageBody button')).some((b) => b.textContent === 'Hủy'));
+d39.querySelector('[data-page="company"]').click();
+eq(d39.getElementById('pageTitle').textContent, 'Công ty');
+// Đăng xuất: hủy phiên ở máy chủ, xóa token, không còn menu / dữ liệu, có nút mở lại trang.
+Array.from(d39.querySelectorAll('#whoBox button')).find((b) => b.textContent === 'Đăng xuất').click();
+eq(g39.slice(-1)[0], ['logout', 'tokL']);
+eq([d39.getElementById('nav').hidden, d39.getElementById('whoBox').hidden, w39.sessionStorage.getItem('hrTokutei.session')], [true, true, null]);
+assert.match(d39.getElementById('pageBody').textContent, /Đã đăng xuất/);
+const again = d39.querySelector('#pageBody a');
+eq([again.textContent, again.getAttribute('href'), again.getAttribute('target')], ['Đăng nhập lại', 'https://script.example.test/exec', '_top']);
+w39.close();
+// Tải lại trang trong cùng tab: còn phiên → vào thẳng; phiên hết giữa chừng → màn hình "hết phiên".
+g39.length = 0;
+const w40 = open({}, srv39, loginPage, { 'hrTokutei.session': 'tokL' });
+w40.scrollTo = () => {};
+const d40 = w40.document;
+eq([g39[0], d40.getElementById('pageTitle').textContent], [['resume', 'tokL'], 'Tổng quan']);
+srv39.expired = true;
+d40.querySelector('[data-page="person"]').click();
+assert.match(d40.getElementById('pageBody').textContent, /Phiên đăng nhập đã hết/);
+eq([d40.getElementById('nav').hidden, w40.sessionStorage.getItem('hrTokutei.session')], [true, null]);
+w40.close();
+// Token cũ không còn hiệu lực khi mở trang → màn hình đăng nhập.
+const w41 = open({}, srv39, loginPage, { 'hrTokutei.session': 'tokCu' });
+eq([w41.document.getElementById('pageTitle').textContent, w41.sessionStorage.getItem('hrTokutei.session')], ['Đăng nhập', null]);
+w41.close();
+console.log('OK — 39 nhóm kiểm tra giao diện đạt');
 w10.close();
 w8.close(); w9.close();
 w7.close();

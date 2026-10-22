@@ -20,7 +20,7 @@ Làm trên máy tính, đăng nhập đúng tài khoản Gmail sẽ dùng cho ap
 2. Tích ô **Hiển thị tệp kê khai "appsscript.json" trong trình chỉnh sửa** (Show "appsscript.json" manifest file in editor).
 3. Quay lại biểu tượng **< >** (Trình chỉnh sửa / Editor).
 
-### 3. Dán 45 file
+### 3. Dán 46 file
 Với mỗi file dưới đây: mở file trên GitHub → bấm nút **Copy raw file** (biểu tượng 2 ô vuông, góc phải trên khung code) → dán vào Apps Script, **thay toàn bộ** nội dung cũ.
 
 | File trên GitHub | Trong Apps Script |
@@ -70,10 +70,11 @@ Với mỗi file dưới đây: mở file trên GitHub → bấm nút **Copy raw
 | `src/DocsUi.html` | Bấm **+** → **HTML** → đặt tên `DocsUi` |
 | `src/Mendan.gs` | Bấm **+** → **Tập lệnh** → đặt tên `Mendan` |
 | `src/MendanUi.html` | Bấm **+** → **HTML** → đặt tên `MendanUi` |
+| `src/LoginUi.html` | Bấm **+** → **HTML** → đặt tên `LoginUi` |
 
 Bấm biểu tượng **Lưu** (hoặc Ctrl+S / ⌘+S).
 
-### Cách nhanh thay cho bước 3: đẩy cả 45 file bằng clasp (máy tính có Node.js 22+)
+### Cách nhanh thay cho bước 3: đẩy cả 46 file bằng clasp (máy tính có Node.js 22+)
 1. Mở <https://script.google.com/home/usersettings> → bật **Google Apps Script API**.
 2. Trong project: **Cài đặt dự án** (bánh răng) → sao chép **Mã tập lệnh** (Script ID).
 3. Trên máy tính (Terminal / PowerShell):
@@ -84,7 +85,7 @@ Bấm biểu tượng **Lưu** (hoặc Ctrl+S / ⌘+S).
    cd jinzai-manager
    ```
 4. Tạo file `.clasp.json` trong thư mục đó, nội dung: `{"scriptId": "MÃ_VỪA_SAO_CHÉP", "rootDir": "src"}`
-5. `clasp push -f` → tải lại trình soạn thảo, thấy đủ 45 file. **Lưu ý:** push thay TOÀN BỘ file trong project bằng file trong `src/` (file bạn tự thêm trong project sẽ mất). Lần sau cập nhật: `git pull` rồi `clasp push -f`.
+5. `clasp push -f` → tải lại trình soạn thảo, thấy đủ 46 file. **Lưu ý:** push thay TOÀN BỘ file trong project bằng file trong `src/` (file bạn tự thêm trong project sẽ mất). Lần sau cập nhật: `git pull` rồi `clasp push -f`.
 
 ### 4. Cấp quyền (làm lại mỗi khi app cần quyền mới)
 1. Ở thanh trên trình soạn thảo, ô chọn hàm → chọn **getSetupStatus** → bấm **Chạy** (Run). Từ bản 0.5.0 app cần thêm quyền tạo lịch tự động (sao lưu), nên phải làm lại bước này.
@@ -109,6 +110,9 @@ Thường do trình duyệt đang đăng nhập **nhiều tài khoản Google** 
 
 ### Gặp lỗi "máy chủ đã gặp phải lỗi trong quá trình đọc từ bộ nhớ. Mã lỗi INTERNAL"
 Thường do bản code mới cần thêm quyền nhưng chưa được cấp. Trong trình soạn thảo, chọn hàm vừa lỗi (vd. `backupNow`) → **Chạy** → cho phép nếu được hỏi → tải lại link `/dev`.
+
+### Sau khi cập nhật lên 0.33.0 (đăng nhập ID + mật khẩu)
+Thêm file `LoginUi.html`; sửa `Code.gs`, `Auth.gs`, `Repo.gs`, `Schema.gs` (chỉ chú thích), `Index.html`, `Staff.html`, `I18n.html`. **Không đổi cấu trúc dữ liệu** (không cần bấm Khởi tạo). Bản thật: tạo **Phiên bản mới** cho bản triển khai `/exec`. Rồi Cài đặt → Nhân viên → **Đặt mật khẩu** cho từng người cần dùng (liên kết cũ hết hiệu lực).
 
 ### Sau khi cập nhật lên 0.27.0
 Thêm file `Auth.gs`, bấm **Nâng cấp ngay** / Khởi tạo một lần (STAFF thêm cột vai trò + liên kết). Muốn cho nhân viên dùng: xem mục **Cho nhân viên dùng** bên dưới.
@@ -161,26 +165,29 @@ Vào **Cài đặt → Khởi tạo / nâng cấp dữ liệu** bấm **một l�
 ## Dữ liệu mẫu để kiểm thử (chỉ bản thử nghiệm)
 Cài đặt → **Dữ liệu mẫu để kiểm thử** → **Tạo dữ liệu mẫu** (chỉ chủ, chỉ 1 lần, khoảng 3–6 phút, để nguyên trang tới khi báo xong). Thêm dữ liệu GIẢ đủ để bấm thử mọi màn hình: nhân viên / công ty / người có chữ "Mẫu" hoặc tên giả, email `@example.com`, ngày tính theo hôm nay. Không sửa / xóa dữ liệu đang có. Bản thật không có nút này.
 
-## Cho nhân viên dùng (GĐ 10 — liên kết truy cập riêng)
-Gmail cá nhân không cho app biết email của người khác, nên mỗi nhân viên dùng **một liên kết riêng**.
-1. **Triển khai → Quản lý các bản triển khai → Sửa** (hoặc Triển khai mới) → Ứng dụng web: *Thực thi với tư cách* **Tôi**; *Ai có quyền truy cập* **Bất kỳ ai có Tài khoản Google** → Triển khai. Dùng link kết thúc bằng `/exec` (link `/dev` chỉ chủ mở được). Người không có liên kết sẽ thấy trang "không có quyền".
-2. Mở app bằng link `/exec` của bạn → Cài đặt → **Nhân viên**: chọn **Vai trò** (Nhân viên / Quản lý) → **Tạo liên kết** → sao chép ngay (chỉ hiện một lần) → gửi riêng cho đúng người.
-3. Nhân viên mở liên kết, đăng nhập Gmail của họ là dùng được. Nghỉ việc: đổi trạng thái "Đã nghỉ" hoặc bấm **Thu hồi** → liên kết hết hiệu lực ngay. Nghi bị lộ: **Tạo lại**.
-- Liên kết nằm trong địa chỉ trang → đừng chụp màn hình thanh địa chỉ, nhắc nhân viên không dùng máy chung (lịch sử trình duyệt giữ liên kết).
-- Quyền của **Nhân viên** / **Quản lý**: Cài đặt → **Phân quyền** (bật / tắt, có hiệu lực ngay ở lần gọi sau; nhân viên tải lại trang để menu cập nhật). Mặc định: Nhân viên = tuyển dụng, visa, hỗ trợ + **xem số giấy tờ đầy đủ** + **doanh số của mình**; Quản lý = tất cả. Luôn chỉ chủ: Khởi tạo, Khôi phục, sao lưu tự động, cấp liên kết, đổi vai trò, Phân quyền, mở tệp giấy tờ.
+## Cho nhân viên dùng (GĐ 12.1 — đăng nhập ID + mật khẩu)
+Gmail cá nhân không cho app biết email của người khác, nên nhân viên đăng nhập bằng **ID + mật khẩu** riêng. Chủ (Gmail triển khai) vẫn vào thẳng, không cần mật khẩu.
+1. **Triển khai → Quản lý các bản triển khai → Sửa** (hoặc Triển khai mới) → Ứng dụng web: *Thực thi với tư cách* **Tôi**; *Ai có quyền truy cập* **Bất kỳ ai có Tài khoản Google** → Triển khai. Dùng link kết thúc bằng `/exec` (link `/dev` chỉ chủ mở được). Người mở link mà chưa đăng nhập chỉ thấy màn hình đăng nhập, không có dữ liệu.
+2. Mở app bằng link `/exec` của bạn → Cài đặt → **Nhân viên**: chọn **Vai trò** (Nhân viên / Quản lý) → **Đặt mật khẩu** → sao chép ngay dòng `ID: STF-…  /  Mật khẩu: …` (chỉ hiện một lần) → gửi riêng cho đúng người cùng link `/exec`.
+3. Nhân viên mở link `/exec`, đăng nhập Google của họ, nhập **ID** (= mã nhân viên, vd. `STF-0001`) + mật khẩu tạm → app **bắt đổi mật khẩu** (ít nhất 8 ký tự, khác ID) rồi mới vào. Sau đó tự đổi được bằng nút **Đổi mật khẩu** trên thanh trên; **Đăng xuất** cạnh đó.
+4. Quên mật khẩu: chủ bấm **Đặt lại mật khẩu** (mở luôn khóa tạm). Nghỉ việc / nghi lộ: **Khóa đăng nhập**, đổi "Đã nghỉ" hoặc ẩn → phiên đang mở bị đăng xuất ngay ở lần bấm tiếp theo.
+- Phiên đăng nhập hết sau **2 giờ không dùng**; tải lại trang trong cùng tab không phải đăng nhập lại, đóng tab là phải đăng nhập lại.
+- Nhập sai mật khẩu **5 lần** → ID đó bị khóa tạm **15 phút**.
+- **Liên kết cũ `?k=…` (GĐ 10) không còn dùng được** — sau khi cập nhật lên 0.33.0, đặt mật khẩu cho từng nhân viên cần dùng app.
+- Quyền của **Nhân viên** / **Quản lý**: Cài đặt → **Phân quyền** (bật / tắt, có hiệu lực ngay ở lần gọi sau; nhân viên tải lại trang để menu cập nhật). Mặc định: Nhân viên = tuyển dụng, visa, hỗ trợ + **xem số giấy tờ đầy đủ** + **doanh số của mình**; Quản lý = tất cả. Luôn chỉ chủ: Khởi tạo, Khôi phục, sao lưu tự động, đặt / khóa mật khẩu, đổi vai trò, Phân quyền, mở tệp giấy tờ.
 
 ## Tạo bản thật (bước 9a — chỉ làm khi bản thử nghiệm đã kiểm thử xong)
 Bản thật là **một project Apps Script riêng**, không dùng chung với bản thử nghiệm (dữ liệu giả và dữ liệu thật không bao giờ lẫn nhau). Khoảng 30 phút.
 1. Bật **xác minh 2 bước** cho tài khoản Google (D-009).
-2. <https://script.google.com> → **Dự án mới** → đổi tên thành **HR Tokutei** → làm bước 2 + 3 ở trên (hiện `appsscript.json`, dán đủ 45 file từ GitHub, bản mới nhất) → **Lưu**.
+2. <https://script.google.com> → **Dự án mới** → đổi tên thành **HR Tokutei** → làm bước 2 + 3 ở trên (hiện `appsscript.json`, dán đủ 46 file từ GitHub, bản mới nhất) → **Lưu**.
 3. Ô chọn hàm → chọn **setProdEnv** → **Chạy** → cấp quyền (kiểm tra đúng tên **HR Tokutei**). Nhật ký thực thi phải ra: *"Đã đặt môi trường thật (PROD)"*. Nếu báo "đã có dữ liệu thử nghiệm" → bạn đang ở nhầm project thử nghiệm, dừng lại.
 4. Ô chọn hàm → **getSetupStatus** → **Chạy** (cấp nốt quyền Drive / Sheets / lịch tự động nếu Google hỏi).
-5. **Triển khai → Triển khai mới** → bánh răng → **Ứng dụng web**: Mô tả `0.31.0`; *Thực thi với tư cách* **Tôi**; *Ai có quyền truy cập* **Bất kỳ ai có Tài khoản Google** (để nhân viên dùng liên kết riêng; người không có liên kết chỉ thấy trang "không có quyền") → **Triển khai** → sao chép link kết thúc bằng `/exec`. Lưu link này vào dấu trang.
+5. **Triển khai → Triển khai mới** → bánh răng → **Ứng dụng web**: Mô tả `0.31.0`; *Thực thi với tư cách* **Tôi**; *Ai có quyền truy cập* **Bất kỳ ai có Tài khoản Google** (để nhân viên đăng nhập bằng ID + mật khẩu; người chưa đăng nhập chỉ thấy màn hình đăng nhập) → **Triển khai** → sao chép link kết thúc bằng `/exec`. Lưu link này vào dấu trang.
 6. Mở link `/exec` → không còn băng vàng "Bản thử nghiệm"; Cài đặt không có mục Đo tốc độ / Dữ liệu mẫu. Bấm **Khởi tạo / nâng cấp dữ liệu**: tạo thư mục `HR Tokutei` với `HR_DATA` / `HR_SENSITIVE` / `HR_FILES` (không có đuôi `_TEST`).
 7. Cài đặt → **Sao lưu** → **Bật sao lưu tự động**.
 8. Cài đặt → **Tài chính & hóa đơn**: điền thông tin thật (tên công ty, địa chỉ, số T, tài khoản). **Danh mục**: kiểm tra lĩnh vực, giấy tờ. **Nhân viên**: thêm người thật, chọn vai trò. **Phân quyền**: xem lại.
 9. Dữ liệu cũ: Cài đặt → **Nhập file quản lý cũ (Excel)** (xem mục dưới). Bảng khác (đơn tuyển, ứng viên chưa vào làm…): **Nhập từng bảng (CSV / Excel)** theo thứ tự 1 → 5. Mỗi lần đều bấm **Kiểm tra** trước rồi mới nhập.
-10. Cấp liên kết cho nhân viên (mục "Cho nhân viên dùng" ở trên).
+10. Đặt mật khẩu cho nhân viên (mục "Cho nhân viên dùng" ở trên).
 
 Cập nhật code bản thật về sau: dán file đã đổi → Lưu → **Triển khai → Quản lý các bản triển khai → Sửa (bút chì) → Phiên bản: Phiên bản mới → Triển khai** (link `/exec` giữ nguyên). Nếu CHANGELOG ghi "đổi cấu trúc dữ liệu" thì sau đó bấm **Khởi tạo** (app tự sao lưu trước khi nâng cấp).
 

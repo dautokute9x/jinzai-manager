@@ -1,4 +1,4 @@
-// Kiểm tra GĐ 10 (D-075): liên kết truy cập riêng cho nhân viên, 2 vai trò, chặn gọi thẳng khi không phải chủ.
+// Kiểm tra GĐ 10 + GĐ 12.1 (D-083): đăng nhập ID + mật khẩu, phiên ở máy chủ, 2 vai trò, chặn gọi thẳng khi không phải chủ.
 // Chạy: node tests/auth.test.js
 const assert = require('assert');
 const { makeGoogle, load, eq } = require('./fakes');
@@ -15,33 +15,71 @@ const C = app.createRecord('STAFF', { ho_ten: 'Da Nghi Gia', trang_thai: 'da_ngh
 assert.throws(() => app.createRecord('STAFF', { ho_ten: 'x', vai_tro: 'admin' }), /"code":"invalidChoice"/);
 const p = app.savePerson('', { ho_ten_latin: 'Nguoi Gia', ngay_sinh: '2000-01-01', quoc_tich: vn.id, so_ho_chieu: 'C7654321' }).person;
 
-// Chủ tạo liên kết: chỉ trả token 1 lần; lưu mã băm; không gửi mã băm về trình duyệt; nhật ký che mã băm.
-const la = app.issueAccessLink(A.id);
-assert.match(la.token, /^[a-z0-9]{32,}$/);
-assert.strictEqual(la.url, 'https://script.example.test/exec?k=' + la.token);
-const lb = app.issueAccessLink(B.id);
-assert.throws(() => app.issueAccessLink(C.id), /"code":"staffInactive"/);
+// GĐ 12.1 (D-083): PBKDF2 đúng chuẩn (so với Node), mã băm liên kết cũ / ô trống không khớp.
+const crypto = require('crypto');
+eq(app.pbkdf2_('mật khẩu', 'muoi', 1000), crypto.pbkdf2Sync('mật khẩu', 'muoi', 1000, 32, 'sha256').toString('base64'));
+assert(!app.checkPassword_('x', 'a'.repeat(64)) && !app.checkPassword_('', '') && !app.checkPassword_('x', 'tmp$'));
+
+// Chủ đặt mật khẩu tạm: chỉ trả 1 lần; lưu mã băm có tiền tố tmp$; không gửi mã băm về trình duyệt; nhật ký che mã băm.
+const pa = app.setStaffPassword(A.id);
+eq([pa.id, pa.password.length], ['STF-0001', 12]);
+const pb = app.setStaffPassword(B.id);
+assert.throws(() => app.setStaffPassword(C.id), /"code":"staffInactive"/);
 const data = Object.values(g.items).find((x) => x.name === 'HR_DATA_TEST');
 const staffRows = data.getSheetByName('STAFF').rows;
-assert(!JSON.stringify(staffRows).includes(la.token), 'không lưu token');
-assert(staffRows.some((r) => r.includes(app.hashToken_(la.token))), 'lưu mã băm');
+assert(!JSON.stringify(staffRows).includes(pa.password), 'không lưu mật khẩu thô');
+assert(staffRows.some((r) => r.some((c) => String(c).indexOf('tmp$pbkdf2$5000$') === 0)), 'lưu mã băm PBKDF2, đánh dấu tạm');
 assert(!('khoa_hash' in app.listRecords('STAFF')[0]));
 assert(app.listRecords('STAFF').find((s) => s.id === A.id).khoa_luc);
-const aud = data.getSheetByName('AUDIT_LOG').rows.slice(1).filter((r) => r[11] === 'cap_lien_ket');
-assert(aud.length === 2 && aud.every((r) => !r[13].includes(app.hashToken_(la.token)) && r[13].includes('***')), 'nhật ký che mã băm');
+const aud = data.getSheetByName('AUDIT_LOG').rows.slice(1).filter((r) => r[11] === 'dat_mat_khau');
+assert(aud.length === 2 && aud.every((r) => !r[13].includes('pbkdf2') && r[13].includes('***')), 'nhật ký che mã băm');
+assert(!('khoa_hash' in app.revokeAccess(C.id)), 'kết quả trả về trình duyệt không có mã băm');
 
-// Người dùng Gmail khác (Google không cho biết email) gọi thẳng → bị chặn hết.
+// Người dùng Gmail khác (Google không cho biết email) gọi thẳng → bị chặn hết; mở app → màn hình đăng nhập, không có dữ liệu.
 g.session.active = '';
 forbidden(() => app.listRecords('PERSON'));
 forbidden(() => app.getSales({}));
 forbidden(() => app.initTestData());
 forbidden(() => app.getSetupStatus());
 forbidden(() => app.restoreBackup('x'));
-forbidden(() => app.issueAccessLink(A.id));
-eq(app.doGet({ parameter: {} }).html.includes('không có quyền'), true);
-eq(app.doGet({ parameter: { k: 'sai' + 'a'.repeat(40) } }).html.includes('thu hồi'), true);
-const page = app.doGet({ parameter: { k: la.token } });
-eq([page.tpl.role, page.tpl.who, page.tpl.token === la.token], ['nhan_vien', 'Nhan Vien Gia', true]);
+forbidden(() => app.setStaffPassword(A.id));
+forbidden(() => app.changeMyPassword('a', 'b'));
+const page = app.doGet({ parameter: { k: 'lien-ket-cu' } });
+eq([page.tpl.role, page.tpl.token, page.tpl.who, page.tpl.perms, page.tpl.url], ['login', '', '', 'null', 'https://script.example.test/exec']);
+g.session.active = 'owner@example.test';
+eq(app.doGet({ parameter: {} }).tpl.role, 'owner');
+g.session.active = '';
+
+// Đăng nhập: sai ID / sai mật khẩu / người đã nghỉ → cùng một lỗi; ID không phân biệt hoa thường.
+assert.throws(() => app.login('STF-0001', 'sai'), /LOGIN_FAILED/);
+assert.throws(() => app.login('STF-0099', pa.password), /LOGIN_FAILED/);
+assert.throws(() => app.login('STF-0003', ''), /LOGIN_FAILED/);
+assert.throws(() => app.login('', ''), /LOGIN_FAILED/);
+const sa = app.login(' stf-0001 ', pa.password);
+eq([sa.role, sa.who, sa.ma, sa.mustChange, sa.perms.so_giay_to], ['nhan_vien', 'Nhan Vien Gia', 'STF-0001', true, true]);
+assert.match(sa.token, /^[a-z0-9]{32,}$/);
+assert(!JSON.stringify(g.cache).includes(sa.token), 'chỉ lưu mã băm của token phiên');
+// Mật khẩu tạm: mọi hàm bị chặn trừ đổi mật khẩu; kiểm tra mật khẩu mới.
+forbidden(() => app.api(sa.token, 'listRecords', ['PERSON']));
+assert.throws(() => app.api(sa.token, 'changeMyPassword', [pa.password, 'ngan']), /"code":"tooShort"/);
+assert.throws(() => app.api(sa.token, 'changeMyPassword', [pa.password, 'stf-0001']), /"code":"weakPassword"/);
+assert.throws(() => app.api(sa.token, 'changeMyPassword', ['sai', 'MatKhauMoi-2026']), /"code":"wrongPassword"/);
+assert.throws(() => app.api(sa.token, 'changeMyPassword', [pa.password, pa.password]), /"code":"samePassword"/);
+eq(app.api(sa.token, 'changeMyPassword', [pa.password, 'MatKhauMoi-2026']), true);
+assert.throws(() => app.login('STF-0001', pa.password), /LOGIN_FAILED/, 'mật khẩu tạm hết dùng được');
+const sa2 = app.login('STF-0001', 'MatKhauMoi-2026');
+eq(sa2.mustChange, false);
+// Đổi mật khẩu lần nữa từ phiên sa: sa vẫn dùng được, phiên khác (sa2) bị đăng xuất.
+eq(app.api(sa.token, 'changeMyPassword', ['MatKhauMoi-2026', 'MatKhauA-2026']), true);
+eq(app.resumeSession(sa.token).who, 'Nhan Vien Gia');
+assert.throws(() => app.api(sa2.token, 'whoAmI', []), /SESSION_EXPIRED/);
+assert.throws(() => app.resumeSession(sa2.token), /SESSION_EXPIRED/);
+const tokA = sa.token;
+// Quản lý: đổi mật khẩu tạm rồi dùng.
+const sb = app.login('STF-0002', pb.password);
+app.api(sb.token, 'changeMyPassword', [pb.password, 'QuanLy-2026!']);
+const tokB = sb.token;
+const la = { token: tokA }; const lb = { token: tokB }; // giữ tên biến của các kiểm tra GĐ 10 bên dưới
 
 // Nhân viên qua api (quyền mặc định D-077): tuyển dụng + số giấy tờ + doanh số của mình; không tiền toàn công ty, hóa đơn, hợp đồng, cài đặt, nhập / xuất.
 const apiA = (fn, ...args) => app.api(la.token, fn, args);
@@ -60,23 +98,23 @@ eq(apiA('getPersonDocs', p.id, false).so_ho_chieu, '****4321');
 forbidden(() => apiA('getSetupStatus'));
 forbidden(() => apiA('readAll_'));
 forbidden(() => apiA('api', la.token, 'listRecords', ['PERSON']));
-forbidden(() => apiA('issueAccessLink', A.id));
-forbidden(() => app.api('khong-hop-le' + 'a'.repeat(30), 'listRecords', ['PERSON']));
+forbidden(() => apiA('setStaffPassword', A.id));
+assert.throws(() => app.api('khonghople' + 'a'.repeat(30), 'listRecords', ['PERSON']), /SESSION_EXPIRED/);
 const co = apiA('createRecord', 'COMPANY', { ten_phap_nhan: 'Công ty do NV tạo' });
 const lastAudit = data.getSheetByName('AUDIT_LOG').rows.slice(-1)[0];
-eq([lastAudit[9], lastAudit[3], lastAudit.includes('STF-0001 Nhan Vien Gia (liên kết)')], ['COMPANY', 'STF-0001 Nhan Vien Gia (liên kết)', true]);
+eq([lastAudit[9], lastAudit[3], lastAudit.includes('STF-0001 Nhan Vien Gia')], ['COMPANY', 'STF-0001 Nhan Vien Gia', true]);
 eq(apiA('whoAmI'), { role: 'nhan_vien', ho_ten: 'Nhan Vien Gia', ma: 'STF-0001' });
 assert(Array.isArray(apiA('getTasks', {}).tasks));
 forbidden(() => app.listRecords('PERSON')); // sau api, quyền không "dính" sang lần gọi thẳng
 
-// Quản lý qua liên kết: xem tiền được, nhưng không khởi tạo / khôi phục / cấp liên kết.
+// Quản lý đăng nhập: xem tiền được, nhưng không khởi tạo / khôi phục / đặt mật khẩu cho người khác.
 const apiB = (fn, ...args) => app.api(lb.token, fn, args);
 assert(apiB('getSales', {}).month);
 assert(Array.isArray(apiB('listRecords', 'REVENUE')));
 eq(apiB('getPersonDocs', p.id, true).so_ho_chieu, 'C7654321');
 forbidden(() => apiB('initTestData'));
 forbidden(() => apiB('restoreBackup', 'x'));
-forbidden(() => apiB('issueAccessLink', A.id));
+forbidden(() => apiB('setStaffPassword', A.id));
 forbidden(() => apiB('revokeAccess', A.id));
 
 // Trình kích hoạt sao lưu chạy không có người dùng web → vẫn chạy; người ngoài gọi thẳng → bị chặn.
@@ -131,14 +169,27 @@ forbidden(() => apiA('updateRecord', 'STAFF', A.id, { ho_ten: 'x' }, aRow().sua_
 const dupTry = apiA('savePerson', '', { ho_ten_latin: 'Nguoi Khac Han', ngay_sinh: '1990-05-05', quoc_tich: vn.id, so_ho_chieu: 'C7654321' }, '', false);
 assert(dupTry.person && !dupTry.duplicates, 'không lộ "trùng số hộ chiếu"');
 
-// Chủ thu hồi / cho nghỉ → liên kết hết hiệu lực ngay.
+// Sai mật khẩu 5 lần → khóa tạm (kể cả nhập đúng); hết thời gian khóa hoặc chủ đặt lại mật khẩu → mở.
+for (let i = 0; i < 5; i++) assert.throws(() => app.login('STF-0002', 'sai'), /LOGIN_FAILED/);
+assert.throws(() => app.login('STF-0002', 'QuanLy-2026!'), /LOCKED/);
+delete g.cache['L_STF-0002']; // giả lập hết 15 phút
+const sb2 = app.login('STF-0002', 'QuanLy-2026!');
+// Đăng xuất / hết phiên → token không dùng được nữa.
+app.logout(sb2.token);
+assert.throws(() => app.api(sb2.token, 'whoAmI', []), /SESSION_EXPIRED/);
+const sb3 = app.login('STF-0002', 'QuanLy-2026!');
+Object.keys(g.cache).filter((k) => k.indexOf('S_' + app.hashToken_(sb3.token)) === 0).forEach((k) => { delete g.cache[k]; }); // giả lập 2 giờ không dùng
+assert.throws(() => app.api(sb3.token, 'whoAmI', []), /SESSION_EXPIRED/);
+
+// Chủ khóa đăng nhập / cho nghỉ → phiên đang mở hết hiệu lực ngay, không đăng nhập lại được.
 g.session.active = 'owner@example.test';
 app.revokeAccess(B.id);
 const a1 = app.listRecords('STAFF').find((s) => s.id === A.id);
 app.updateRecord('STAFF', A.id, { trang_thai: 'da_nghi' }, a1.sua_luc);
 g.session.active = '';
-forbidden(() => apiB('getSales', {}));
-forbidden(() => apiA('listRecords', 'PERSON'));
-eq(app.doGet({ parameter: { k: la.token } }).html.includes('thu hồi'), true);
+assert.throws(() => apiB('getSales', {}), /SESSION_EXPIRED/);
+assert.throws(() => apiA('listRecords', 'PERSON'), /SESSION_EXPIRED/);
+assert.throws(() => app.login('STF-0002', 'QuanLy-2026!'), /LOGIN_FAILED/);
+assert.throws(() => app.login('STF-0001', 'MatKhauA-2026'), /LOGIN_FAILED/);
 
-console.log('OK — kiểm tra phân quyền nhiều người dùng (GĐ 10) đạt');
+console.log('OK — kiểm tra đăng nhập ID + mật khẩu và phân quyền nhiều người dùng (GĐ 10, 12.1) đạt');

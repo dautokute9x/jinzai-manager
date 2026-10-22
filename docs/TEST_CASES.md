@@ -2,6 +2,23 @@
 
 Kết quả: `PASS` (đã chạy và quan sát) / `FAIL` / `NOT RUN`. Chỉ dùng dữ liệu giả.
 
+## Bước 12.1 — Đăng nhập ID + mật khẩu (0.33.0, D-083)
+
+`tests/auth.test.js` (máy chủ giả lập) + `tests/ui.test.js` nhóm 33, 39 (giao diện) đã chạy: PASS — băm PBKDF2 khớp chuẩn, mật khẩu tạm + bắt đổi, sai ID / mật khẩu, khóa tạm 5 lần, đăng xuất, hết phiên, khóa / nghỉ → mất phiên, mã băm không về trình duyệt. Chưa chạy trên Apps Script thật.
+
+| Mã | Thao tác | Kỳ vọng | Kết quả |
+|---|---|---|---|
+| T12.1-1 | Chủ: Cài đặt → Nhân viên → **Đặt mật khẩu** cho 1 nhân viên giả | Hiện 1 lần `ID: STF-…  /  Mật khẩu: …`; cột Đăng nhập ghi "Đặt mật khẩu <giờ>" | NOT RUN |
+| T12.1-2 | Mở link `/exec` bằng Gmail khác (cửa sổ ẩn danh) | Chỉ thấy màn hình Đăng nhập, không có menu / dữ liệu | NOT RUN |
+| T12.1-3 | Đăng nhập bằng ID + mật khẩu tạm | Bắt đổi mật khẩu; không có nút Hủy; đổi xong vào Tổng quan, góc trên có tên + Đổi mật khẩu + Đăng xuất | NOT RUN |
+| T12.1-4 | Đo thời gian từ bấm Đăng nhập tới khi vào (hoặc báo lỗi) | Ghi số giây vào đây (để chỉnh số vòng băm) | NOT RUN |
+| T12.1-5 | Nhập sai mật khẩu 5 lần, lần 6 nhập đúng | Lần 6 báo khóa tạm 15 phút; chủ bấm Đặt lại mật khẩu → đăng nhập bằng mật khẩu tạm mới được | NOT RUN |
+| T12.1-6 | Tải lại trang (F5) khi đang đăng nhập | Vẫn vào thẳng, không hỏi lại mật khẩu | NOT RUN |
+| T12.1-7 | Bấm Đăng xuất → bấm Đăng nhập lại | Về màn hình đăng nhập sạch | NOT RUN |
+| T12.1-8 | Nhân viên đang mở app; chủ bấm **Khóa đăng nhập** người đó; nhân viên bấm 1 mục menu | Nhân viên thấy "Phiên đăng nhập đã hết", không đăng nhập lại được | NOT RUN |
+| T12.1-9 | Mở liên kết cũ `?k=…` | Chỉ thấy màn hình đăng nhập | NOT RUN |
+| T12.1-10 | Xem tab AUDIT_LOG sau T12.1-1, T12.1-3 | Có dòng `dat_mat_khau`, `doi_mat_khau`; cột giá trị chỉ có `***`, không có mật khẩu / mã băm | NOT RUN |
+
 ## Bước 1.1 — Trang "xin chào"
 
 | Mã | Tình huống | Thao tác | Kết quả kỳ vọng | Kết quả |

@@ -1,0 +1,140 @@
+<script>
+// GĐ 12.1 (D-083): đăng nhập ID + mật khẩu, đổi mật khẩu, đăng xuất. Dùng hàm chung của Index (el, t, fmt, render, runServer, ACCESS, startApp).
+// Token phiên chỉ nằm trong bộ nhớ trang + sessionStorage của tab (tải lại trang không phải đăng nhập lại; đóng tab là mất).
+const SESSION_KEY = 'hrTokutei.session';
+let auth = { screen: null, forced: false, busy: false, error: null, msg: null, id: '', pw: '', old: '', nw: '', cf: '' };
+
+function saveToken_(tok) { try { if (tok) sessionStorage.setItem(SESSION_KEY, tok); else sessionStorage.removeItem(SESSION_KEY); } catch (e) {} }
+
+// Gọi trong render(): đang ở màn hình đăng nhập / đổi mật khẩu / đã đăng xuất thì vẽ màn hình đó và trả true.
+// auth.screen: null | 'change' | 'done' (đã đổi xong). Bấm menu bỏ 'change' / 'done' (trừ khi bắt buộc đổi).
+function authScreen() {
+  const nav = document.getElementById('nav');
+  const role = ACCESS.role;
+  const screen = role === 'login' ? 'login' : role === 'ended' ? 'ended' : auth.screen;
+  nav.hidden = screen === 'login' || screen === 'ended' || (screen === 'change' && auth.forced);
+  document.getElementById('menuBtn').hidden = nav.hidden;
+  if (!screen) return false;
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  document.getElementById('pageTitle').textContent = t(screen === 'change' || screen === 'done' ? 'auth.changeTitle' : 'auth.title');
+  if (screen === 'login') body.append(renderLoginForm());
+  else if (screen === 'change') body.append(renderChangeForm());
+  else if (screen === 'done') body.append(el('div', 'msg-ok', t('auth.changed')));
+  else body.append(renderEnded());
+  return true;
+}
+
+function field_(labelKey, key, type, autocomplete) {
+  const lb = el('label', 'field', t(labelKey));
+  const inp = el('input');
+  inp.type = type; inp.value = auth[key]; inp.autocomplete = autocomplete; inp.maxLength = 100; inp.required = true;
+  inp.addEventListener('input', () => { auth[key] = inp.value; });
+  lb.append(inp);
+  return lb;
+}
+
+function renderLoginForm() {
+  const form = el('form', 'form');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    auth.busy = true; auth.error = null; render();
+    runServer('login', [auth.id, auth.pw], (info) => { auth.pw = ''; startSession(info); },
+      (msg) => { auth.busy = false; auth.pw = ''; auth.error = msg; render(); });
+  });
+  const id = field_('auth.id', 'id', 'text', 'username');
+  const pw = field_('auth.password', 'pw', 'password', 'current-password');
+  const actions = el('div', 'form-actions');
+  const go = el('button', 'btn-primary', auth.busy ? t('auth.busy') : t('auth.submit'));
+  go.type = 'submit'; go.disabled = auth.busy;
+  actions.append(go);
+  form.append(id, pw);
+  if (auth.error) form.append(el('div', 'msg-err', auth.error));
+  form.append(actions);
+  setTimeout(() => (auth.id ? pw : id).querySelector('input').focus(), 0);
+  return form;
+}
+
+function renderChangeForm() {
+  const form = el('form', 'form');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (auth.nw !== auth.cf) { auth.error = t('auth.mismatch'); render(); return; }
+    auth.busy = true; auth.error = null; render();
+    runServer('changeMyPassword', [auth.old, auth.nw], () => {
+      const forced = auth.forced;
+      Object.assign(auth, { screen: forced ? null : 'done', forced: false, busy: false, old: '', nw: '', cf: '' });
+      if (forced) startApp(); else render();
+    }, (msg) => { auth.busy = false; auth.error = msg; render(); });
+  });
+  if (auth.forced) form.append(el('div', 'msg-warn', t('auth.forcedNote')));
+  form.append(field_('auth.old', 'old', 'password', 'current-password'), field_('auth.new', 'nw', 'password', 'new-password'),
+    field_('auth.confirm', 'cf', 'password', 'new-password'));
+  if (auth.error) form.append(el('div', 'msg-err', auth.error));
+  const actions = el('div', 'form-actions');
+  const save = el('button', 'btn-primary', auth.busy ? t('auth.busy') : t('auth.save'));
+  save.type = 'submit'; save.disabled = auth.busy;
+  actions.append(save);
+  if (!auth.forced) {
+    const cancel = el('button', 'btn', t('auth.cancel'));
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => { Object.assign(auth, { screen: null, error: null, old: '', nw: '', cf: '' }); render(); });
+    actions.append(cancel);
+  }
+  form.append(actions);
+  setTimeout(() => form.querySelector('input').focus(), 0);
+  return form;
+}
+
+// Sau đăng xuất / hết phiên: không vẽ lại dữ liệu cũ; nút mở lại trang từ đầu (trạng thái giao diện sạch).
+function renderEnded() {
+  const box = el('div', 'stack');
+  box.append(el('div', auth.msg === 'auth.loggedOut' ? 'msg-ok' : 'msg-warn', t(auth.msg || 'auth.loggedOut')));
+  const url = document.body.dataset.url;
+  if (url && !/<\?/.test(url)) {
+    const a = el('a', 'btn-primary', t('auth.again'));
+    a.href = url; a.target = '_top';
+    box.append(a);
+  }
+  return box;
+}
+
+function startSession(info) {
+  Object.assign(ACCESS, { token: info.token, role: info.role, who: info.who, perms: info.perms });
+  saveToken_(info.token);
+  Object.assign(auth, { busy: false, error: null, screen: info.mustChange ? 'change' : null, forced: !!info.mustChange });
+  if (info.mustChange) render(); else startApp();
+}
+
+// Mở trang: tab này còn phiên (đã đăng nhập, tải lại trang) → vào thẳng; không thì màn hình đăng nhập.
+function resumeOrLogin() {
+  let tok = '';
+  try { tok = sessionStorage.getItem(SESSION_KEY) || ''; } catch (e) { tok = ''; }
+  if (!tok) { render(); return; }
+  auth.busy = true; render();
+  runServer('resumeSession', [tok], (info) => startSession(Object.assign({ token: tok }, info)),
+    () => { saveToken_(''); auth.busy = false; render(); });
+}
+
+function endSession(msgKey) {
+  const tok = ACCESS.token;
+  saveToken_('');
+  Object.assign(ACCESS, { token: '', role: 'ended', perms: null });
+  auth.msg = msgKey;
+  if (msgKey === 'auth.loggedOut') runServer('logout', [tok], () => {}, () => {}); // hủy phiên ở máy chủ
+  document.getElementById('whoBox').hidden = true;
+  render();
+}
+
+// Tên người đang đăng nhập + Đổi mật khẩu + Đăng xuất (thanh trên).
+function renderWhoBox() {
+  const w = document.getElementById('whoBox');
+  w.hidden = false;
+  w.replaceChildren(el('span', null, ACCESS.who + ' · ' + t('role.' + ACCESS.role) + ' '));
+  const ch = el('button', 'btn small', t('auth.change')); ch.type = 'button';
+  ch.addEventListener('click', () => { Object.assign(auth, { screen: 'change', forced: false, error: null }); render(); });
+  const out = el('button', 'btn small', t('auth.logout')); out.type = 'button';
+  out.addEventListener('click', () => endSession('auth.loggedOut'));
+  w.append(ch, out);
+}
+</script>

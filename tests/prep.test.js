@@ -131,8 +131,10 @@ eq(preC.trang_thai, 'huy');
 assert(/Tự hủy/.test(preC.ghi_chu));
 
 // Phân quyền: nhân viên dùng được 受入れ前 / giấy tờ; lưu mẫu cần "cài đặt chung".
-const link = app.issueAccessLink(st.id);
+const tmp = app.setStaffPassword(st.id);
 g.session.active = '';
+const link = app.login(tmp.id, tmp.password);
+app.api(link.token, 'changeMyPassword', [tmp.password, 'MatKhau-Gia-1']);
 const apiA = (fn, ...args) => app.api(link.token, fn, args);
 assert(apiA('getPreEntries', {}).rows.length >= 1);
 assert(Array.isArray(apiA('getMissingDocs', {}).rows));

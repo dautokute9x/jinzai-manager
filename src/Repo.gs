@@ -684,7 +684,7 @@ function checkRefs_(rules, rec, current) {
 function nowJst_() { return Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'); }
 
 function currentUser_() {
-  if (ACTOR_) return ACTOR_.ma + ' ' + ACTOR_.ho_ten + ' (liên kết)'; // GĐ 10: nhật ký ghi đúng nhân viên
+  if (ACTOR_) return ACTOR_.ma + ' ' + ACTOR_.ho_ten; // nhật ký ghi đúng nhân viên đăng nhập (trước GĐ 12.1 có thêm hậu tố "(liên kết)")
   return callerEmail_() || Session.getEffectiveUser().getEmail();
 }
 
@@ -870,6 +870,7 @@ function withLock_(fn) {
 function public_(rec) {
   const out = Object.assign({}, rec);
   delete out._row;
+  delete out.khoa_hash; // GĐ 12.1: mã băm mật khẩu không bao giờ về trình duyệt
   return out;
 }
 

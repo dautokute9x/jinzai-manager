@@ -5,7 +5,7 @@ const SCHEMA_VERSION = 18; // 2: COMPANY + LOOKUP (2.1). 3: CONTACT (2.2). 4: JO
 const COMMON_COLUMNS = ['id', 'ma', 'tao_luc', 'tao_boi', 'sua_luc', 'sua_boi', 'da_an'];
 
 const DATA_TABLES = {
-  STAFF: ['ho_ten', 'trang_thai', 'vai_tro', 'khoa_hash', 'khoa_luc'], // GĐ 10: vai trò + mã băm liên kết truy cập
+  STAFF: ['ho_ten', 'trang_thai', 'vai_tro', 'khoa_hash', 'khoa_luc'], // GĐ 10: vai trò; khoa_hash = mã băm mật khẩu (GĐ 12.1, trước đây: liên kết)
   TEAM: ['ten'],
   TEAM_MEMBERSHIP: ['staff_id', 'team_id', 'tu_ngay', 'den_ngay'],
   // sales_staff_id / support_staff_id / linh_vuc: nhiều ID cách nhau bằng dấu phẩy (bước 2.1, Q5).

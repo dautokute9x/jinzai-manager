@@ -16,7 +16,7 @@ Hệ thống quản lý hoạt động 人材紹介・登録支援機関 (chủ 
 
 ## 3. Quy ước chung
 - Múi giờ: JST (D-014). Ngôn ngữ mặc định: tiếng Việt, có tiếng Nhật (D-018).
-- Đăng nhập Google (D-008).
+- Chủ: đăng nhập Google (D-008). Nhân viên: ID + mật khẩu (D-083, thay liên kết D-075).
 - Quy mô: < 1.000 bản ghi mỗi loại; nguồn import chung một cấu trúc (D-007).
 - Lưu đầy đủ số hộ chiếu/在留カード trong file nhạy cảm riêng, không chia sẻ, bật xác minh 2 bước (D-009).
 

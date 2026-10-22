@@ -1,5 +1,14 @@
 # CHANGELOG.md
 
+## 0.33.0 — 2026-10-22 — GĐ 12.1: đăng nhập ID + mật khẩu (D-083) — không đổi cấu trúc dữ liệu
+
+- Nhân viên đăng nhập bằng **ID (= mã nhân viên, vd. STF-0001) + mật khẩu** thay cho liên kết bí mật `?k=…` (liên kết cũ hết hiệu lực). Chủ vẫn vào thẳng bằng Gmail triển khai.
+- Chủ: Cài đặt → Nhân viên → **Đặt mật khẩu / Đặt lại mật khẩu** (mật khẩu tạm 12 ký tự, hiện một lần) và **Khóa đăng nhập**. Lần đăng nhập đầu bắt đổi mật khẩu (≥ 8 ký tự, khác ID); trước khi đổi, mọi chức năng khác bị máy chủ chặn.
+- Mật khẩu lưu dạng băm **PBKDF2-HMAC-SHA256** (muối riêng, 5.000 vòng, số vòng lưu trong chuỗi băm) ở cột `STAFF.khoa_hash`; mã băm không bao giờ gửi về trình duyệt (kể cả kết quả lưu nhân viên) và được che trong AUDIT_LOG.
+- Phiên đăng nhập ở máy chủ (CacheService): hết sau 2 giờ không dùng; đăng xuất, đổi / đặt lại mật khẩu, khóa, "Đã nghỉ", ẩn → phiên cũ hết hiệu lực ngay. Đổi mật khẩu giữ phiên đang dùng, đăng xuất các phiên khác. Sai 5 lần → khóa tạm 15 phút.
+- Giao diện: màn hình đăng nhập, đổi mật khẩu, nút Đổi mật khẩu / Đăng xuất trên thanh trên; hết phiên giữa chừng → báo và mời đăng nhập lại. Nhật ký ghi tên nhân viên không còn hậu tố "(liên kết)".
+- Thêm: `LoginUi.html`. Sửa: `Code.gs` (0.33.0), `Auth.gs`, `Repo.gs`, `Schema.gs` (chú thích), `Index.html`, `Staff.html`, `I18n.html`, `README.md`, tests (`fakes.js`, `auth.test.js`, `prep.test.js`, `ui.test.js`). (clasp: `git pull` + `clasp push -f`.)
+
 ## 0.32.1 — 2026-10-21 — Chống lỗi tạm "ストレージからの読み取り中にサーバーエラー… INTERNAL"
 
 - Google thỉnh thoảng báo lỗi tạm khi app đọc / ghi thuộc tính dự án (Script Properties); trước đây đọc ngay lúc khởi động mỗi lần gọi, không thử lại → cả trang lỗi (nhiều dòng "thất bại 0 giây" trong 実行数). Nay đọc 1 lần / lần gọi và tự thử lại tối đa 4 lần.

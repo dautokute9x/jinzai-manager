@@ -77,14 +77,14 @@ Cập nhật: 2026-10-22
 
 ## GĐ 12 — Nâng cấp miễn phí theo master prompt (repo `jinzai-manager`, D-082)
 
-Vẫn Apps Script + Sheets, chi phí 0. Thứ tự giữa GĐ 12 và 11.5–11.8: D-087 (CẦN HỎI).
+Vẫn Apps Script + Sheets, chi phí 0. Làm GĐ 12 trước 11.5–11.8 (D-087).
 
 | Bước | Nội dung | Phụ thuộc | Trạng thái |
 |---|---|---|---|
 | 12.0 | Repo mới, lưu master prompt, chạy toàn bộ kiểm thử bằng `npm install && npm test` | — | XONG (D-082) |
-| 12.1 | Đăng nhập ID + mật khẩu, hết phiên, khóa tài khoản có hiệu lực phía máy chủ | D-083 | CHỜ DUYỆT |
-| 12.2 | Phạm vi dữ liệu theo người phụ trách, ẩn thông tin liên lạc / tiền theo quyền, vai trò mở rộng | D-084, 12.1 | CHỜ DUYỆT |
-| 12.3 | Giao diện 4 ngôn ngữ (thêm Indonesia, Myanmar + font), nhớ theo tài khoản | D-085, 12.1 | CHỜ DUYỆT |
+| 12.1 | Đăng nhập ID + mật khẩu, hết phiên, khóa tài khoản có hiệu lực phía máy chủ | D-083 | XONG phần lập trình (0.33.0) — chờ chủ dự án kiểm thử |
+| 12.2 | Phạm vi dữ liệu theo người phụ trách, ẩn thông tin liên lạc / tiền theo quyền, vai trò mở rộng | D-084, 12.1 | KHÔNG LÀM — giữ D-077 (D-084) |
+| 12.3 | Giao diện 4 ngôn ngữ (thêm Indonesia, Myanmar + font), nhớ theo tài khoản | D-085, 12.1 | CHƯA — kế tiếp |
 | 12.4 | Đo lại với 2.000 người giả; phân trang / lọc phía máy chủ cho danh sách lớn nếu cần | D-086 | CHỜ DUYỆT |
 
 ## Hướng website doanh nghiệp (sau — chưa làm)

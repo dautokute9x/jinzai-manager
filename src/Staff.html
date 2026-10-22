@@ -59,7 +59,7 @@ function renderStaffForm() {
   return form;
 }
 
-// GĐ 10 (D-075): vai trò + liên kết truy cập riêng (chỉ chủ thấy). Liên kết chỉ hiện MỘT lần ngay sau khi tạo.
+// GĐ 10: vai trò; GĐ 12.1 (D-083): mật khẩu tạm (chỉ chủ thấy) — chỉ hiện MỘT lần ngay sau khi đặt.
 function roleCell(r) {
   const td = el('td');
   const sel = el('select', 'cell-input');
@@ -82,7 +82,7 @@ function accessCell(r) {
     make.setAttribute('aria-label', make.textContent + ' ' + r.ho_ten);
     make.addEventListener('click', () => {
       staff.saving = true; staff.error = null; render();
-      runServer('issueAccessLink', [r.id], (res) => { staff.saving = false; staff.link = { name: r.ho_ten, url: res.url || ('?k=' + res.token) }; loadStaff(); },
+      runServer('setStaffPassword', [r.id], (res) => { staff.saving = false; staff.link = { name: r.ho_ten, url: 'ID: ' + res.id + '  /  ' + t('auth.password') + ': ' + res.password }; loadStaff(); },
         (msg) => { staff.saving = false; staff.error = msg; render(); });
     });
     box.append(make);

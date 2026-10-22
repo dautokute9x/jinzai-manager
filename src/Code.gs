@@ -1,22 +1,21 @@
 const APP_NAME = 'HR Tokutei';
-const APP_VERSION = '0.32.1';
+const APP_VERSION = '0.33.0';
 
-function doGet(e) {
-  // GĐ 10 (D-075): chủ mở trực tiếp; nhân viên mở bằng liên kết riêng ?k=…; người khác → trang từ chối.
-  const token = String((e && e.parameter && e.parameter.k) || '');
-  const staff = token ? staffByToken_(token) : null;
-  if (!staff && !isOwner_()) {
-    return HtmlService.createHtmlOutput('<p style="font-family:sans-serif;padding:24px">' + (token
-      ? 'Liên kết không hợp lệ hoặc đã bị thu hồi. / リンクが無効か、取り消されています。'
-      : 'Bạn không có quyền mở ứng dụng này. / このアプリを開く権限がありません。') + '</p>').setTitle(APP_NAME);
-  }
+function doGet() {
+  // GĐ 12.1 (D-083): chủ mở trực tiếp (tài khoản Google triển khai); người khác thấy màn hình đăng nhập ID + mật khẩu.
+  // Trang chưa đăng nhập không chứa dữ liệu nào: mọi dữ liệu chỉ qua api() sau khi có phiên.
+  CALLER_EMAIL_ = null; // như requireOwner_: không dùng email đã nhớ của lần gọi trước
+  const owner = isOwner_();
   const page = HtmlService.createTemplateFromFile('Index');
-  page.token = staff ? token : '';
-  page.role = staff ? (ROLES.indexOf(staff.vai_tro) >= 0 ? staff.vai_tro : 'nhan_vien') : 'owner';
-  page.who = staff ? staff.ho_ten : '';
+  page.token = '';
+  page.role = owner ? 'owner' : 'login';
+  page.who = '';
   const own = {};
   PERMS.forEach((p) => { own[p] = true; });
-  page.perms = JSON.stringify(staff ? asSystem_(() => permissions_()[page.role]) : own); // D-077: giao diện ẩn mục không có quyền
+  page.perms = JSON.stringify(owner ? own : null);
+  let url = '';
+  try { url = ScriptApp.getService().getUrl() || ''; } catch (e) { url = ''; }
+  page.url = url; // nút "Đăng nhập lại" sau khi đăng xuất / hết phiên
   page.appName = APP_NAME;
   page.version = APP_VERSION;
   page.schema = SCHEMA_VERSION; // giao diện tự nhắc nâng cấp khi file Sheets còn cấu trúc cũ

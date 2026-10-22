@@ -4,6 +4,10 @@ const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
 
+// Mảng byte có dấu như Apps Script (-128..127) ↔ Buffer.
+const signed = (buf) => Array.from(buf).map((b) => (b > 127 ? b - 256 : b));
+const unsigned = (v) => (typeof v === 'string' ? Buffer.from(v, 'utf8') : Buffer.from(Array.from(v).map((b) => b & 255)));
+
 function makeGoogle() {
   let nextId = 1;
   const clock = { now: '2026-10-19 12:00:00' };
@@ -12,6 +16,7 @@ function makeGoogle() {
   const triggers = [];
   const session = { active: 'owner@example.test' };
   const lock = { busy: false }; // true = như có lần chạy khác đang giữ khóa
+  const cache = {}; // CacheService (bỏ qua thời hạn; test tự xóa key để giả lập hết hạn)
   const newId = () => 'id' + nextId++;
 
   function folder(name, parent) {
@@ -81,7 +86,7 @@ function makeGoogle() {
 
   return {
     lock,
-    items, props, clock, triggers, session,
+    items, props, clock, triggers, session, cache,
     globals: {
       DriveApp: { createFolder: (n) => folder(n, null), getFolderById: get, getFileById: get },
       SpreadsheetApp: { create: spreadsheet, openById: get, flush: () => {}, ProtectionType: { SHEET: 'SHEET' } },
@@ -91,6 +96,7 @@ function makeGoogle() {
         createTemplateFromFile: (name) => { const tpl = { name, evaluate: () => { const o = { tpl, setTitle: () => o, addMetaTag: () => o }; return o; } }; return tpl; },
       },
       PropertiesService: { getScriptProperties: () => ({ getProperties: () => Object.assign({}, props), getProperty: (k) => props[k] || null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: (k) => { delete props[k]; } }) },
+      CacheService: { getScriptCache: () => ({ get: (k) => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = String(v); }, remove: (k) => { delete cache[k]; } }) },
       LockService: { getScriptLock: () => ({ waitLock: () => {}, tryLock: () => !lock.busy, releaseLock: () => {} }) },
       // Giờ giả lập lấy từ clock.now ('yyyy-MM-dd HH:mm:ss', coi là JST), định dạng theo mẫu.
       Utilities: {
@@ -108,7 +114,9 @@ function makeGoogle() {
         Charset: { UTF_8: 'UTF_8' },
         // Như Apps Script: mảng byte có dấu (-128..127).
         base64Decode: (s) => Array.from(Buffer.from(s, 'base64')).map((b) => (b > 127 ? b - 256 : b)),
-        newBlob: (bytes, mime, name) => ({ bytes, mime, name }),
+        newBlob: (bytes, mime, name) => ({ bytes, mime, name, getBytes: () => (typeof bytes === 'string' ? signed(Buffer.from(bytes, 'utf8')) : bytes) }),
+        computeHmacSha256Signature: (value, key) => signed(require('crypto').createHmac('sha256', unsigned(key)).update(unsigned(value)).digest()),
+        base64Encode: (bytes) => unsigned(bytes).toString('base64'),
       },
       ScriptApp: {
         getProjectTriggers: () => triggers.slice(),
