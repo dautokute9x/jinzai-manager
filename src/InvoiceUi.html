@@ -1,0 +1,354 @@
+<script>
+// GĐ 8 (D-069): trang "Hóa đơn & 入金" — danh sách, tạo nháp từ các khoản chưa vào hóa đơn, phát hành, hủy, in (適格請求書), 入金;
+// thẻ "Người giới thiệu": khoản phải trả + đánh dấu đã trả.
+// Dùng t(), fmt(), el(), render(), runServer() của Index.html; company, companyInput(), validationField(), todayJst() của Company.html;
+// byMa của Jobs.html; yen() của FinanceUi.html; goPersonDetail() của DashboardUi.html.
+const INV_TABS = ['hoa_don', 'nguoi_gt'];
+let inv = { tab: 'hoa_don', list: null, fState: '', detailId: null, detail: null, creating: null, saving: false, error: null, fieldErr: null,
+  payForm: null, cancelReason: null, payouts: null, payTodo: null, payEdits: {} };
+
+function loadInvoicePage() {
+  inv.error = null;
+  if (!fin.data) loadFinance(); // thuế suất cho phần xem trước
+  runServer('listRecords', ['COMPANY'], (rows) => { company.rows = rows; render(); }, (msg) => { inv.error = msg; render(); });
+  if (inv.tab === 'hoa_don') { if (inv.detailId) loadInvoice(inv.detailId); else loadInvoices(); } else loadPayouts();
+}
+
+function loadInvoices() {
+  runServer('listInvoices', [], (rows) => { inv.list = rows; render(); }, (msg) => { inv.error = msg; render(); });
+}
+
+function loadInvoice(id) {
+  inv.detailId = id; inv.detail = null; inv.payForm = null; inv.cancelReason = null;
+  runServer('getInvoice', [id], (res) => { inv.detail = res; render(); }, (msg) => { inv.error = msg; render(); });
+}
+
+function invCall(fn, args, after) {
+  inv.saving = true; inv.error = null; inv.fieldErr = null; render();
+  runServer(fn, args, (res) => { inv.saving = false; after(res); render(); },
+    (msg, raw) => {
+      inv.saving = false;
+      const field = validationField(raw);
+      if (field && (inv.payForm || inv.creating)) inv.fieldErr = { field: field, msg: msg }; else inv.error = msg;
+      if (msg === t('err.CONFLICT')) { if (inv.detailId) loadInvoice(inv.detailId); else loadInvoices(); }
+      render();
+    });
+}
+
+function goInvoice(ma) {
+  page = 'invoice';
+  Object.assign(inv, { tab: 'hoa_don', detailId: null, detail: null, creating: null });
+  loadInvoicePage();
+  if (ma) runServer('listInvoices', [], (rows) => { inv.list = rows; const v = rows.find((x) => x.ma === ma); if (v) loadInvoice(v.id); render(); }, (msg) => { inv.error = msg; render(); });
+  render();
+  window.scrollTo(0, 0);
+}
+
+function renderInvoicePage() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  const root = el('div', 'stack');
+  const tabs = el('div', 'tabs no-print');
+  tabs.setAttribute('role', 'tablist');
+  INV_TABS.forEach((k) => {
+    const b = el('button', 'tab', t('inv.tab.' + k));
+    b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(inv.tab === k));
+    b.addEventListener('click', () => { inv.tab = k; inv.detailId = null; inv.creating = null; loadInvoicePage(); render(); });
+    tabs.append(b);
+  });
+  root.append(tabs);
+  if (inv.error) root.append(el('div', 'msg-err', inv.error));
+  if (inv.tab === 'nguoi_gt') root.append(renderPayouts());
+  else if (inv.detailId) root.append(renderInvoiceDetail());
+  else root.append(renderInvoiceList());
+  body.append(root);
+}
+
+// ---- Danh sách + tạo nháp ----
+function renderInvoiceList() {
+  const box = el('div', 'stack');
+  const bar = el('div', 'toolbar');
+  const filters = el('div', 'filters');
+  const sel = el('select');
+  sel.setAttribute('aria-label', t('inv.col.state'));
+  [['', t('inv.col.state') + ': ' + t('company.all')]].concat(['nhap', 'cho_thu', 'qua_han', 'da_thu_du', 'huy'].map((s) => [s, t('inv.state.' + s)]))
+    .forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; sel.append(op); });
+  sel.value = inv.fState;
+  sel.addEventListener('change', () => { inv.fState = sel.value; render(); });
+  filters.append(sel);
+  const add = el('button', 'btn-primary', t('inv.new'));
+  add.type = 'button'; add.disabled = inv.saving || !!inv.creating;
+  add.addEventListener('click', () => { inv.creating = { companyId: '', items: null, picked: {}, data: { ngay_lap: todayJst(), ghi_chu: '' } }; inv.fieldErr = null; render(); });
+  bar.append(filters, add);
+  box.append(bar);
+  if (inv.creating) box.append(renderInvoiceCreate());
+  const list = inv.list;
+  if (!list) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const rows = list.filter((v) => !inv.fState || v.state === inv.fState);
+  if (!rows.length) { box.append(el('div', 'muted', t('inv.empty'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards many');
+  const cols = ['staff.col.ma', 'field.company_id', 'field.ngay_lap', 'field.han_tt', 'inv.col.total', 'inv.col.paid', 'inv.col.remain', 'inv.col.state', 'staff.col.actions'];
+  const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  rows.forEach((v) => {
+    const cell = (i, text, cls) => { const td = el('td', cls || null, text); td.dataset.label = t(cols[i]); return td; };
+    const open = el('button', 'btn', t('inv.open'));
+    open.type = 'button'; open.setAttribute('aria-label', t('inv.open') + ' ' + v.ma);
+    open.addEventListener('click', () => { loadInvoice(v.id); render(); });
+    const act = cell(8, null); act.append(open);
+    const tr = el('tr', v.state === 'qua_han' ? 'warn-row' : v.state === 'huy' ? 'hidden-row' : null);
+    tr.append(cell(0, v.ma), cell(1, v.company), cell(2, v.ngay_lap, 'nowrap'), cell(3, v.han_tt, 'nowrap'),
+      cell(4, yen(v.total) + (v.state === 'nhap' ? ' *' : '')), cell(5, v.state === 'nhap' || v.state === 'huy' ? '—' : yen(v.paid)),
+      cell(6, v.state === 'nhap' || v.state === 'huy' ? '—' : yen(v.remain)), cell(7, t('inv.state.' + v.state), v.state === 'qua_han' ? 'msg-err' : null), act);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap, el('div', 'muted', t('inv.listNote')));
+  return box;
+}
+
+function renderInvoiceCreate() {
+  const c = inv.creating;
+  const fe = inv.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.setAttribute('aria-labelledby', 'inv-new-h');
+  const h = el('h3', null, t('inv.new')); h.id = 'inv-new-h';
+  wrap.append(h);
+  const holder = { data: { company_id: c.companyId } };
+  const cos = company.rows.filter((x) => !x.da_an).sort(byMa).map((x) => [x.id, x.ma + ' · ' + x.ten_phap_nhan]);
+  const coField = companyInput(holder, 'company_id', { required: true, options: [['', '—']].concat(cos), fe: fe });
+  coField.querySelector('select').addEventListener('change', (e) => {
+    c.companyId = e.target.value; c.items = null; c.picked = {};
+    if (c.companyId) runServer('getUninvoiced', [c.companyId], (rows) => { c.items = rows; rows.forEach((r) => { c.picked[r.id] = true; }); render(); }, (msg) => { inv.error = msg; render(); });
+    render();
+  });
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.append(coField, companyInput(c, 'ngay_lap', { required: true, type: 'date', fe: fe }), companyInput(c, 'ghi_chu', { max: 1000, wide: true, fe: fe }));
+  if (c.companyId && !c.items) form.append(el('div', 'muted wide', t('setup.loading')));
+  if (c.items) {
+    const set = el('fieldset', 'field wide');
+    set.append(el('legend', null, t('inv.pick')));
+    if (!c.items.length) set.append(el('div', 'muted', t('inv.noItems')));
+    const list = el('div', 'stack tight');
+    c.items.forEach((r) => {
+      const lab = el('label', 'check');
+      const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!c.picked[r.id];
+      cb.addEventListener('change', () => { c.picked[r.id] = cb.checked; render(); });
+      lab.append(cb, document.createTextNode(r.ngay + ' · ' + t('sales.type.' + r.loai) + (r.thang ? ' ' + r.thang : '') + ' · ' + (r.person || '—') + ' · ' + yen(r.so_tien)));
+      list.append(lab);
+    });
+    set.append(list);
+    const base = c.items.filter((r) => c.picked[r.id]).reduce((s, r) => s + Number(r.so_tien), 0);
+    const rate = fin.data ? Number(fin.data.tax) : null;
+    set.append(el('div', 'muted', rate === null ? fmt('inv.previewNoTax', { base: yen(base) })
+      : fmt('inv.preview', { base: yen(base), rate: rate, tax: yen(Math.trunc(base * rate / 100)), total: yen(base + Math.trunc(base * rate / 100)) })));
+    form.append(set);
+  }
+  if (fe && fe.field === 'lines') form.append(el('div', 'msg-err wide', fe.msg));
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const ids = (c.items || []).filter((r) => c.picked[r.id]).map((r) => r.id);
+    invCall('createInvoice', [c.companyId, ids, c.data.ngay_lap, '', c.data.ghi_chu], (res) => { inv.creating = null; loadInvoice(res.id); });
+  });
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', inv.saving ? t('ui.saving') : t('inv.createDraft'));
+  save.type = 'submit'; save.disabled = inv.saving || !c.items || !c.items.some((r) => c.picked[r.id]);
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.addEventListener('click', () => { inv.creating = null; inv.fieldErr = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(form);
+  return wrap;
+}
+
+// ---- Chi tiết + in + 入金 ----
+function renderInvoiceDetail() {
+  const box = el('div', 'stack');
+  const back = el('button', 'btn no-print', t('inv.back'));
+  back.type = 'button'; back.addEventListener('click', () => { inv.detailId = null; inv.detail = null; loadInvoices(); render(); });
+  box.append(back);
+  const d = inv.detail;
+  if (!d) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const v = d.invoice;
+  const head = el('div', 'toolbar no-print');
+  head.append(el('h2', null, v.ma + ' · ' + v.company + ' — ' + t('inv.state.' + v.state)));
+  const acts = el('div', 'row-actions');
+  if (v.trang_thai === 'nhap') {
+    const issue = el('button', 'btn-primary', t('inv.issue'));
+    issue.type = 'button'; issue.disabled = inv.saving;
+    issue.addEventListener('click', () => invCall('issueInvoice', [v.id, v.sua_luc], () => loadInvoice(v.id)));
+    acts.append(issue);
+  }
+  if (v.trang_thai !== 'huy') {
+    const cancel = el('button', 'btn', t('inv.cancel'));
+    cancel.type = 'button'; cancel.disabled = inv.saving || inv.cancelReason !== null;
+    cancel.addEventListener('click', () => { inv.cancelReason = ''; render(); });
+    const print = el('button', 'btn', t('inv.print'));
+    print.type = 'button'; print.addEventListener('click', () => window.print());
+    acts.append(cancel, print);
+  }
+  head.append(acts);
+  box.append(head);
+  if (v.trang_thai === 'nhap') box.append(el('div', 'msg-warn no-print', t('inv.draftNote')));
+  if (inv.cancelReason !== null) {
+    const f = el('div', 'filters no-print');
+    const r = el('input'); r.value = inv.cancelReason; r.maxLength = 300; r.placeholder = t('inv.cancelWhy'); r.setAttribute('aria-label', t('inv.cancelWhy'));
+    r.addEventListener('input', () => { inv.cancelReason = r.value; });
+    const ok = el('button', 'btn', t('inv.cancelConfirm')); ok.type = 'button'; ok.disabled = inv.saving;
+    ok.addEventListener('click', () => invCall('cancelInvoice', [v.id, v.sua_luc, inv.cancelReason], () => { inv.cancelReason = null; loadInvoice(v.id); }));
+    const no = el('button', 'btn', t('staff.cancel')); no.type = 'button'; no.addEventListener('click', () => { inv.cancelReason = null; render(); });
+    f.append(r, ok, no);
+    box.append(f);
+  }
+  box.append(renderPrintable(d));
+  if (v.trang_thai === 'da_phat_hanh') box.append(renderPayments(d));
+  return box;
+}
+
+// Bản in luôn bằng tiếng Nhật (gửi khách Nhật), đủ mục của 適格請求書.
+function renderPrintable(d) {
+  const v = d.invoice; const iss = d.issuer; const co = d.company;
+  const sheet = el('section', 'invoice-sheet print-area');
+  sheet.setAttribute('aria-label', '請求書 ' + v.ma);
+  const top = el('div', 'inv-top');
+  const to = el('div');
+  to.append(el('div', 'inv-title', v.trang_thai === 'huy' ? '請求書（取消）' : v.trang_thai === 'nhap' ? '請求書（下書き）' : '請求書'),
+    el('div', 'inv-to', co.ten_phap_nhan + ' 御中'), el('div', 'muted', [co.ma_buu_dien ? '〒' + co.ma_buu_dien : '', co.tinh_thanh, co.dia_chi].filter(String).join(' ')));
+  const from = el('div', 'inv-from');
+  from.append(el('div', null, '請求番号：' + v.ma), el('div', null, '発行日：' + v.ngay_lap), el('div', null, 'お支払期限：' + v.han_tt),
+    el('strong', null, iss.issuer_name || '（発行者名 未設定）'), el('div', null, iss.issuer_address || ''),
+    el('div', null, '登録番号：' + (iss.issuer_tno || '（未設定）')));
+  top.append(to, from);
+  sheet.append(top);
+  const rate = v.trang_thai === 'da_phat_hanh' ? Number(v.thue_suat) : Number(iss.tax);
+  const base = v.trang_thai === 'da_phat_hanh' ? Number(v.tien_chua_thue) : v.preview_base;
+  const tax = v.trang_thai === 'da_phat_hanh' ? Number(v.tien_thue) : Math.trunc(base * rate / 100);
+  sheet.append(el('div', 'inv-total', 'ご請求金額（税込）　' + yen(base + tax)));
+  const table = el('table', 'inv-lines');
+  const thead = el('thead'); const hr = el('tr');
+  ['日付', '内容', '対象者', '金額（税抜）'].forEach((x) => hr.append(el('th', null, x)));
+  thead.append(hr);
+  const tbody = el('tbody');
+  const label = { gioi_thieu: '人材紹介手数料', coc: '人材紹介手数料（内定承諾時 1/2）', con_lai: '人材紹介手数料（入社時 残額 1/2）', ho_tro: '登録支援委託費', hoan: '紹介手数料 返金', khac: 'その他' };
+  d.lines.forEach((r) => {
+    const tr = el('tr');
+    tr.append(el('td', 'nowrap', r.ngay), el('td', null, label[r.loai] + (r.thang ? '（' + r.thang.replace('-', '年') + '月分）' : '') + (r.ghi_chu ? ' ' + r.ghi_chu : '')),
+      el('td', null, r.person || ''), el('td', 'num', yen(r.so_tien)));
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  sheet.append(table);
+  const sum = el('table', 'inv-sum');
+  [[rate + '% 対象（税抜）', yen(base)], ['消費税（' + rate + '%）', yen(tax)], ['合計（税込）', yen(base + tax)]].forEach((p) => {
+    const tr = el('tr'); tr.append(el('th', null, p[0]), el('td', 'num', p[1])); sum.append(tr);
+  });
+  sheet.append(sum);
+  if (iss.bank) sheet.append(el('div', 'inv-bank pre', 'お振込先：\n' + iss.bank));
+  if (v.ghi_chu) sheet.append(el('div', 'muted pre', v.ghi_chu));
+  return sheet;
+}
+
+function renderPayments(d) {
+  const v = d.invoice;
+  const box = el('section', 'stack no-print');
+  box.setAttribute('aria-labelledby', 'pay-h');
+  const bar = el('div', 'toolbar');
+  const h = el('h2', null, fmt('inv.payTitle', { paid: yen(v.paid), remain: yen(v.remain) })); h.id = 'pay-h';
+  const add = el('button', 'btn-primary', t('inv.payAdd'));
+  add.type = 'button'; add.disabled = inv.saving || !!inv.payForm;
+  add.addEventListener('click', () => { inv.payForm = { data: { ngay: todayJst(), so_tien: String(v.remain), ghi_chu: '' } }; inv.fieldErr = null; render(); });
+  bar.append(h, add);
+  box.append(bar);
+  if (inv.payForm) {
+    const f = inv.payForm; const fe = inv.fieldErr;
+    const form = el('form', 'form');
+    form.noValidate = true;
+    form.addEventListener('submit', (e) => { e.preventDefault(); invCall('createRecord', ['PAYMENT', Object.assign({ invoice_id: v.id }, f.data)], () => { inv.payForm = null; loadInvoice(v.id); }); });
+    form.append(companyInput(f, 'ngay', { required: true, type: 'date', fe: fe }), companyInput(f, 'so_tien', { required: true, type: 'number', fe: fe }),
+      companyInput(f, 'ghi_chu', { max: 500, wide: true, fe: fe }));
+    const actions = el('div', 'form-actions wide');
+    const save = el('button', 'btn-primary', inv.saving ? t('ui.saving') : t('staff.save')); save.type = 'submit'; save.disabled = inv.saving;
+    const cancel = el('button', 'btn', t('staff.cancel')); cancel.type = 'button'; cancel.addEventListener('click', () => { inv.payForm = null; inv.fieldErr = null; render(); });
+    actions.append(save, cancel);
+    form.append(actions);
+    box.append(form);
+  }
+  if (!d.payments.length) { box.append(el('div', 'muted', t('inv.noPay'))); return box; }
+  const ul = el('ul', 'history');
+  d.payments.forEach((p) => {
+    const li = el('li');
+    li.append(el('strong', 'nowrap', p.ngay), el('span', null, ' ' + yen(p.so_tien) + (p.ghi_chu ? ' · ' + p.ghi_chu : '') + ' '));
+    const hide = el('button', 'btn small', t('inv.payUndo')); hide.type = 'button'; hide.disabled = inv.saving;
+    hide.setAttribute('aria-label', t('inv.payUndo') + ' ' + p.ma);
+    hide.addEventListener('click', () => invCall('setHidden', ['PAYMENT', p.id, true, p.sua_luc], () => loadInvoice(v.id)));
+    li.append(hide);
+    ul.append(li);
+  });
+  box.append(ul);
+  return box;
+}
+
+// ---- Người giới thiệu ----
+function loadPayouts() {
+  runServer('getPayoutTodo', [], (rows) => { inv.payTodo = rows; render(); }, (msg) => { inv.error = msg; render(); });
+  runServer('listRecords', ['REFERRER_PAYOUT'], (rows) => { inv.payouts = rows; render(); }, (msg) => { inv.error = msg; render(); });
+  runServer('listRecords', ['PERSON'], (rows) => { person.rows = rows; render(); }, (msg) => { inv.error = msg; render(); });
+}
+
+function renderPayouts() {
+  const box = el('div', 'stack');
+  box.append(el('div', 'muted', t('inv.gtDesc')));
+  if (!inv.payTodo || !inv.payouts) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  box.append(el('h2', null, fmt('inv.gtTodo', { n: inv.payTodo.length })));
+  if (!inv.payTodo.length) box.append(el('div', 'msg-ok', t('inv.gtNone')));
+  inv.payTodo.forEach((r) => {
+    const e = inv.payEdits[r.employment_id] || (inv.payEdits[r.employment_id] = { so_tien: r.so_tien });
+    const line = el('div', 'filters');
+    const amount = el('input', 'num-input money'); amount.type = 'number'; amount.min = '0'; amount.value = e.so_tien;
+    amount.setAttribute('aria-label', t('field.so_tien') + ' ' + r.person);
+    amount.addEventListener('input', () => { e.so_tien = amount.value; });
+    const make = el('button', 'btn', t('sales.make')); make.type = 'button'; make.disabled = inv.saving;
+    make.setAttribute('aria-label', t('sales.make') + ' ' + r.person);
+    make.addEventListener('click', () => invCall('createRecord', ['REFERRER_PAYOUT', { person_id: r.person_id, employment_id: r.employment_id, nguoi_nhan: r.nguoi_nhan, so_tien: e.so_tien }],
+      () => { delete inv.payEdits[r.employment_id]; loadPayouts(); }));
+    line.append(el('span', null, r.ngay_vao_lam + ' · ' + r.person + ' → ' + r.company + ' · ' + t('field.nguoi_nhan') + ': ' + r.nguoi_nhan), amount, make);
+    box.append(line);
+  });
+  const list = inv.payouts.filter((p) => !p.da_an).sort((a, b) => (a.ma < b.ma ? 1 : -1));
+  box.append(el('h2', null, fmt('inv.gtList', { n: list.filter((p) => !p.ngay_tra).length })));
+  if (!list.length) { box.append(el('div', 'muted', t('inv.gtEmpty'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['staff.col.ma', 'field.person_id', 'field.nguoi_nhan', 'field.so_tien', 'field.ngay_tra', 'staff.col.actions'];
+  const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  list.forEach((p) => {
+    const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+    const pp = (person.rows || []).find((x) => x.id === p.person_id);
+    const acts = el('div', 'row-actions');
+    if (!p.ngay_tra) {
+      const paid = el('button', 'btn', t('inv.gtPaid')); paid.type = 'button'; paid.disabled = inv.saving;
+      paid.setAttribute('aria-label', t('inv.gtPaid') + ' ' + p.ma);
+      paid.addEventListener('click', () => invCall('updateRecord', ['REFERRER_PAYOUT', p.id, { ngay_tra: todayJst() }, p.sua_luc], () => loadPayouts()));
+      acts.append(paid);
+    }
+    const hide = el('button', 'btn', t('staff.hide')); hide.type = 'button'; hide.disabled = inv.saving;
+    hide.setAttribute('aria-label', t('staff.hide') + ' ' + p.ma);
+    hide.addEventListener('click', () => invCall('setHidden', ['REFERRER_PAYOUT', p.id, true, p.sua_luc], () => loadPayouts()));
+    acts.append(hide);
+    const actCell = cell(5, null); actCell.append(acts);
+    const tr = el('tr', p.ngay_tra ? null : 'warn-row');
+    tr.append(cell(0, p.ma), cell(1, pp ? pp.ma + ' · ' + pp.ho_ten_latin : ''), cell(2, p.nguoi_nhan), cell(3, yen(p.so_tien)), cell(4, p.ngay_tra || t('inv.gtUnpaid')), actCell);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap);
+  return box;
+}
+</script>

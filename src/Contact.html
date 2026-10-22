@@ -1,0 +1,146 @@
+<script>
+// Bước 2.2: người liên hệ trong trang chi tiết công ty (D-047).
+// Dùng t(), fmt(), el(), render(), runServer() của Index.html; company, companyInput(), validationField() của Company.html.
+const CONTACT_FIELDS = ['ho_ten', 'ho_ten_phien_am', 'bo_phan', 'chuc_vu', 'so_dien_thoai', 'email', 'lien_he_chinh', 'ghi_chu'];
+let contact = { form: null, fieldErr: null, saving: false, error: null, showHidden: false };
+
+function reloadContacts() {
+  runServer('listRecords', ['CONTACT'],
+    (rows) => { company.contacts = rows; render(); },
+    (msg) => { contact.error = msg; render(); });
+}
+
+function saveContact(fn, args, closeForm) {
+  contact.saving = true; contact.error = null; contact.fieldErr = null; render();
+  runServer(fn, args,
+    () => { contact.saving = false; if (closeForm) contact.form = null; reloadContacts(); },
+    (msg, raw) => {
+      contact.saving = false;
+      const field = validationField(raw);
+      if (field && contact.form) contact.fieldErr = { field: field, msg: msg };
+      else contact.error = msg;
+      if (msg === t('err.CONFLICT')) { contact.form = null; reloadContacts(); }
+      render();
+    });
+}
+
+function openContactForm(row, companyId) {
+  const data = {};
+  CONTACT_FIELDS.forEach((k) => { data[k] = row ? row[k] || '' : ''; });
+  contact.form = { id: row ? row.id : null, ma: row ? row.ma : '', sua_luc: row ? row.sua_luc : '', companyId: companyId, data: data, justOpened: true };
+  contact.error = null; contact.fieldErr = null;
+  render();
+}
+
+function submitContact() {
+  const f = contact.form;
+  if (!f.data.ho_ten.trim()) {
+    contact.fieldErr = { field: 'ho_ten', msg: fmt('val.required', { field: t('field.ho_ten') }) };
+    render();
+    return;
+  }
+  if (f.id) saveContact('updateRecord', ['CONTACT', f.id, f.data, f.sua_luc], true);
+  else saveContact('createRecord', ['CONTACT', Object.assign({ company_id: f.companyId }, f.data)], true);
+}
+
+function renderContactForm() {
+  const f = contact.form;
+  const wrap = el('section', 'stack');
+  wrap.setAttribute('aria-labelledby', 'contact-form-h');
+  const h = el('h3', null, f.id ? fmt('contact.editTitle', { ma: f.ma }) : t('contact.newTitle')); h.id = 'contact-form-h';
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitContact(); });
+  const fe = contact.fieldErr;
+  const primary = el('div', 'wide');
+  const primaryLabel = el('label', 'check');
+  const cb = el('input'); cb.type = 'checkbox'; cb.name = 'lien_he_chinh'; cb.checked = f.data.lien_he_chinh === 'Y';
+  cb.addEventListener('change', () => { f.data.lien_he_chinh = cb.checked ? 'Y' : ''; });
+  primaryLabel.append(cb, document.createTextNode(t('field.lien_he_chinh')));
+  primary.append(primaryLabel, el('div', 'muted', t('contact.primaryHint')));
+  form.append(
+    companyInput(f, 'ho_ten', { required: true, max: 100, fe: fe }),
+    companyInput(f, 'ho_ten_phien_am', { max: 100, fe: fe }),
+    companyInput(f, 'bo_phan', { max: 100, fe: fe }),
+    companyInput(f, 'chuc_vu', { max: 100, fe: fe }),
+    companyInput(f, 'so_dien_thoai', { max: 20, type: 'tel', placeholder: '090-1234-5678', fe: fe }),
+    companyInput(f, 'email', { max: 254, type: 'email', placeholder: 'name@example.co.jp', fe: fe }),
+    primary,
+    companyInput(f, 'ghi_chu', { textarea: true, max: 2000, wide: true, fe: fe }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', contact.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = contact.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = contact.saving;
+  cancel.addEventListener('click', () => { contact.form = null; contact.fieldErr = null; contact.error = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(h, form);
+  if (f.justOpened && !fe) { f.justOpened = false; setTimeout(() => { const first = form.querySelector('input'); if (first) first.focus(); }, 0); }
+  return wrap;
+}
+
+function renderContacts(co) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'contact-h');
+  const bar = el('div', 'toolbar');
+  const h = el('h2', null, t('contact.title')); h.id = 'contact-h';
+  const right = el('div', 'filters');
+  const showLabel = el('label', 'check');
+  const show = el('input'); show.type = 'checkbox'; show.checked = contact.showHidden;
+  show.addEventListener('change', () => { contact.showHidden = show.checked; render(); });
+  showLabel.append(show, document.createTextNode(t('staff.showHidden')));
+  const add = el('button', 'btn-primary', t('contact.add'));
+  add.type = 'button'; add.disabled = contact.saving || !!contact.form;
+  add.addEventListener('click', () => openContactForm(null, co.id));
+  right.append(showLabel, add);
+  bar.append(h, right);
+  box.append(bar);
+  if (contact.form) box.append(renderContactForm());
+  if (contact.error) box.append(el('div', 'msg-err', contact.error));
+  if (contact.saving && !contact.form) box.append(el('div', 'muted', t('ui.saving')));
+
+  // Liên hệ chính lên đầu, còn lại theo mã.
+  const rows = company.contacts
+    .filter((r) => r.company_id === co.id && (contact.showHidden || !r.da_an))
+    .sort((a, b) => (a.lien_he_chinh === b.lien_he_chinh ? (a.ma < b.ma ? -1 : 1) : (a.lien_he_chinh === 'Y' ? -1 : 1)));
+  if (!rows.length) { box.append(el('div', 'muted', t('contact.empty'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['staff.col.ma', 'field.ho_ten', 'contact.col.role', 'field.so_dien_thoai', 'field.email', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+  const link = (href, text) => { const a = el('a', null, text); a.href = href; return a; };
+  rows.forEach((r) => {
+    const tr = el('tr', r.da_an ? 'hidden-row' : null);
+    const name = cell(1, r.ho_ten);
+    if (r.lien_he_chinh === 'Y') name.append(el('span', 'badge', t('contact.primaryTag')));
+    if (r.ho_ten_phien_am) name.append(el('div', 'muted', r.ho_ten_phien_am));
+    if (r.da_an) name.append(el('span', 'muted', ' (' + t('staff.hiddenTag') + ')'));
+    const phone = cell(3, null);
+    if (r.so_dien_thoai) phone.append(link('tel:' + r.so_dien_thoai.replace(/[^0-9+]/g, ''), r.so_dien_thoai));
+    const mail = cell(4, null);
+    if (r.email) mail.append(link('mailto:' + r.email, r.email));
+    const acts = el('div', 'row-actions');
+    const edit = el('button', 'btn', t('staff.edit'));
+    edit.type = 'button'; edit.disabled = contact.saving || !!contact.form;
+    edit.setAttribute('aria-label', t('staff.edit') + ' ' + r.ho_ten);
+    edit.addEventListener('click', () => openContactForm(r, co.id));
+    const toggle = el('button', 'btn', r.da_an ? t('staff.unhide') : t('staff.hide'));
+    toggle.type = 'button'; toggle.disabled = contact.saving;
+    toggle.setAttribute('aria-label', (r.da_an ? t('staff.unhide') : t('staff.hide')) + ' ' + r.ho_ten);
+    toggle.addEventListener('click', () => saveContact('setHidden', ['CONTACT', r.id, !r.da_an, r.sua_luc], false));
+    acts.append(edit, toggle);
+    const actCell = cell(5, null); actCell.append(acts);
+    tr.append(cell(0, r.ma), name, cell(2, [r.bo_phan, r.chuc_vu].filter((x) => x).join(' / ')), phone, mail, actCell);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap);
+  return box;
+}
+</script>

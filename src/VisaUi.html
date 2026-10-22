@@ -1,0 +1,414 @@
+<script>
+// Bước 6.2 (D-064): trang Hồ sơ visa + mục "Hồ sơ visa" trong hồ sơ người.
+// Dùng t(), fmt(), el(), render(), runServer(), CHOICES, page của Index.html; company, companyInput(), validationField(), staffOptions(),
+// staffLabel(), lookupLabel(), idList(), todayJst() của Company.html; person, lookupChoices(), asOptions(), plain() của PersonUi.html;
+// companyName(), byMa của Jobs.html; goPersonDetail() của DashboardUi.html.
+const VISA_FIELDS = ['loai_thu_tuc', 'tu_cach_luu_tru', 'company_id', 'trang_thai', 'ngay_nop', 'noi_nop', 'ngay_ket_qua', 'han_moi',
+  'phu_trach_staff_id', 'ghi_chu'];
+let visa = { form: null, fieldErr: null, saving: false, error: null, loading: 0, q: '', fType: '', fStatus: '', fStaff: '',
+  showEnded: false, showHidden: false, listBox: null, docsFor: null, docEdits: {}, addDoc: '', uploading: null, links: {} };
+// Cài đặt → Mẫu checklist (bước 6.3): ids đang sửa theo từng thủ tục.
+let vtpl = { data: null, loai: 'nintei', edits: {}, saving: false, error: null, saved: false };
+
+function loadVisa() {
+  visa.loading = 8; visa.error = null;
+  const fail = (msg) => { visa.loading--; visa.error = msg; render(); };
+  const into = (obj, key) => (rows) => { obj[key] = rows; visa.loading--; render(); };
+  runServer('listRecords', ['IMMIGRATION_CASE'], into(company, 'cases'), fail);
+  runServer('listRecords', ['PERSON'], into(person, 'rows'), fail);
+  runServer('listRecords', ['STAFF'], into(company, 'staff'), fail);
+  runServer('listRecords', ['LOOKUP'], into(company, 'lookup'), fail);
+  runServer('listRecords', ['COMPANY'], into(company, 'rows'), fail);
+  runServer('listRecords', ['CASE_DOCUMENT'], into(company, 'caseDocs'), fail); // bước 6.3
+  runServer('listRecords', ['FILE'], into(company, 'files'), fail); // bước 6.4
+  runServer('listRecords', ['PERSON_DOC'], into(company, 'personDocs'), fail); // GĐ 11.1
+}
+
+// Được cấp có thể đã sửa hạn lưu trú của người → tải lại cả PERSON.
+function reloadCases() {
+  const fail = (msg) => { visa.error = msg; render(); };
+  runServer('listRecords', ['IMMIGRATION_CASE'], (rows) => { company.cases = rows; render(); }, fail);
+  runServer('listRecords', ['PERSON'], (rows) => { person.rows = rows; render(); }, fail);
+  reloadDocs(); // hồ sơ mới có checklist tạo sẵn
+  reloadFiles();
+}
+
+function reloadDocs() {
+  runServer('listRecords', ['CASE_DOCUMENT'], (rows) => { company.caseDocs = rows; render(); }, (msg) => { visa.error = msg; render(); });
+}
+
+function saveCase(fn, args, closeForm) {
+  visa.saving = true; visa.error = null; visa.fieldErr = null; render();
+  runServer(fn, args,
+    () => { visa.saving = false; if (closeForm) visa.form = null; reloadCases(); },
+    (msg, raw) => {
+      visa.saving = false;
+      const field = validationField(raw);
+      if (field && visa.form) visa.fieldErr = { field: field, msg: msg }; else visa.error = msg;
+      if (msg === t('err.CONFLICT')) { visa.form = null; reloadCases(); }
+      render();
+    });
+}
+
+// personId cố định khi thêm từ hồ sơ người; trống = chọn người trong form.
+function openCaseForm(row, personId) {
+  const data = {};
+  VISA_FIELDS.forEach((k) => { data[k] = row ? row[k] || '' : ''; });
+  if (!row) data.trang_thai = 'chuan_bi';
+  visa.form = { id: row ? row.id : null, ma: row ? row.ma : '', sua_luc: row ? row.sua_luc : '',
+    personId: row ? row.person_id : personId || '', fixedPerson: !!(row || personId), data: data };
+  visa.error = null; visa.fieldErr = null;
+  render();
+}
+
+function submitCase() {
+  const f = visa.form;
+  const req = !f.personId ? 'person_id' : !f.data.loai_thu_tuc ? 'loai_thu_tuc' : null;
+  if (req) { visa.fieldErr = { field: req, msg: fmt('val.required', { field: t('field.' + req) }) }; render(); return; }
+  if (f.id) saveCase('updateRecord', ['IMMIGRATION_CASE', f.id, f.data, f.sua_luc], true);
+  else saveCase('createRecord', ['IMMIGRATION_CASE', Object.assign({ person_id: f.personId }, f.data)], true);
+}
+
+function personName(id) {
+  const p = (person.rows || []).find((x) => x.id === id);
+  return p ? p.ma + ' · ' + p.ho_ten_latin : id;
+}
+
+function renderCaseForm() {
+  const f = visa.form;
+  const fe = visa.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.setAttribute('aria-labelledby', 'visa-form-h');
+  const h = el('h3', null, f.id ? fmt('visa.editTitle', { ma: f.ma }) : t('visa.newTitle')); h.id = 'visa-form-h';
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitCase(); });
+  if (f.fixedPerson) {
+    const label = el('div', 'field', t('field.person_id'));
+    label.append(el('div', 'readonly', personName(f.personId)));
+    form.append(label);
+  } else {
+    const holder = { data: { person_id: f.personId } };
+    const people = (person.rows || []).filter((p) => !p.da_an).sort(byMa);
+    const label = companyInput(holder, 'person_id', { required: true, fe: fe,
+      options: [['', '—']].concat(people.map((p) => [p.id, p.ma + ' · ' + p.ho_ten_latin])) });
+    label.querySelector('select').addEventListener('change', (e) => { f.personId = e.target.value; });
+    form.append(label);
+  }
+  const companies = company.rows.filter((c) => !c.da_an || c.id === f.data.company_id).sort(byMa).map((c) => [c.id, c.ma + ' · ' + c.ten_phap_nhan]);
+  const staffOpts = staffOptions(idList(f.data.phu_trach_staff_id)).map((o) => [o.id, o.text + (o.tag ? ' (' + o.tag + ')' : '')]);
+  const hanMoi = companyInput(f, 'han_moi', { type: 'date', fe: fe });
+  hanMoi.append(el('span', 'muted', t('visa.hanMoiHint')));
+  form.append(
+    companyInput(f, 'loai_thu_tuc', { required: true, fe: fe, options: [['', '—']].concat(CHOICES.visaTypes.map((s) => [s, t('visa.type.' + s)])) }),
+    companyInput(f, 'tu_cach_luu_tru', { fe: fe, options: asOptions(lookupChoices('tu_cach_luu_tru', f.data.tu_cach_luu_tru)) }),
+    companyInput(f, 'trang_thai', { fe: fe, options: CHOICES.visaStatuses.map((s) => [s, t('visa.status.' + s)]) }),
+    companyInput(f, 'company_id', { fe: fe, options: [['', '—']].concat(companies) }),
+    companyInput(f, 'ngay_nop', { type: 'date', fe: fe }),
+    companyInput(f, 'noi_nop', { max: 100, fe: fe, placeholder: t('visa.noiNopHint') }),
+    companyInput(f, 'ngay_ket_qua', { type: 'date', fe: fe }),
+    hanMoi,
+    companyInput(f, 'phu_trach_staff_id', { fe: fe, options: [['', '—']].concat(staffOpts) }),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 2000, wide: true, fe: fe }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', visa.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = visa.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = visa.saving;
+  cancel.addEventListener('click', () => { visa.form = null; visa.fieldErr = null; visa.error = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(h, form);
+  return wrap;
+}
+
+// Bảng hồ sơ: dùng chung cho trang Hồ sơ visa (showPerson) và hồ sơ người.
+function caseTable(list, showPerson) {
+  const today = todayJst();
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards many');
+  const cols = ['staff.col.ma'].concat(showPerson ? ['field.person_id'] : [])
+    .concat(['field.loai_thu_tuc', 'field.tu_cach_luu_tru', 'field.trang_thai', 'field.ngay_nop', 'field.ngay_ket_qua', 'field.han_moi', 'field.phu_trach_staff_id',
+      'visa.col.docs', 'staff.col.actions']);
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  list.forEach((r) => {
+    const tr = el('tr', r.da_an ? 'hidden-row' : null);
+    const cells = [];
+    const add = (node) => { node.dataset.label = t(cols[cells.length]); cells.push(node); };
+    add(el('td', null, r.ma));
+    if (showPerson) {
+      const td = el('td');
+      const b = el('button', 'link-btn', personName(r.person_id));
+      b.type = 'button'; b.addEventListener('click', () => goPersonDetail(r.person_id));
+      td.append(b); add(td);
+    }
+    add(el('td', null, t('visa.type.' + r.loai_thu_tuc)));
+    add(el('td', null, r.tu_cach_luu_tru ? lookupLabel(r.tu_cach_luu_tru) : ''));
+    const st = el('td', CHOICES.visaEnded.indexOf(r.trang_thai) >= 0 ? 'muted' : null, t('visa.status.' + r.trang_thai) + (r.da_an ? ' (' + t('staff.hiddenTag') + ')' : ''));
+    if (['da_nop', 'bo_sung'].indexOf(r.trang_thai) >= 0 && r.ngay_nop) st.append(el('div', 'muted', fmt('visa.waiting', { n: daysSince(r.ngay_nop, today) })));
+    add(st);
+    add(el('td', 'nowrap', r.ngay_nop));
+    add(el('td', 'nowrap', r.ngay_ket_qua));
+    add(el('td', 'nowrap', r.han_moi));
+    add(el('td', null, r.phu_trach_staff_id ? staffLabel(r.phu_trach_staff_id) : ''));
+    const docs = docsOf(r.id);
+    const docCell = el('td', null, fmt('visa.docProgress', { done: docs.filter((d) => CHOICES.docDone.indexOf(d.trang_thai) >= 0).length, total: docs.length }));
+    const open = el('button', 'btn small', visa.docsFor === r.id ? t('visa.docClose') : t('visa.docOpen'));
+    open.type = 'button'; open.setAttribute('aria-expanded', String(visa.docsFor === r.id));
+    open.setAttribute('aria-label', open.textContent + ' ' + r.ma);
+    open.addEventListener('click', () => { visa.docsFor = visa.docsFor === r.id ? null : r.id; visa.docEdits = {}; visa.addDoc = ''; render(); });
+    docCell.append(el('br'), open);
+    add(docCell);
+    const acts = el('div', 'row-actions');
+    const edit = el('button', 'btn', t('staff.edit'));
+    edit.type = 'button'; edit.disabled = visa.saving || !!visa.form;
+    edit.setAttribute('aria-label', t('staff.edit') + ' ' + r.ma);
+    edit.addEventListener('click', () => openCaseForm(r));
+    const toggle = el('button', 'btn', r.da_an ? t('staff.unhide') : t('staff.hide'));
+    toggle.type = 'button'; toggle.disabled = visa.saving;
+    toggle.setAttribute('aria-label', toggle.textContent + ' ' + r.ma);
+    toggle.addEventListener('click', () => saveCase('setHidden', ['IMMIGRATION_CASE', r.id, !r.da_an, r.sua_luc], false));
+    acts.append(edit, toggle);
+    const actCell = el('td'); actCell.append(acts); add(actCell);
+    cells.forEach((c) => tr.append(c));
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  const opened = list.find((r) => r.id === visa.docsFor);
+  if (!opened) return wrap;
+  const both = el('div', 'stack');
+  both.append(wrap, renderChecklist(opened));
+  return both;
+}
+
+function docsOf(caseId) {
+  return (company.caseDocs || []).filter((d) => d.case_id === caseId && !d.da_an).sort(byMa);
+}
+
+// Checklist giấy tờ của 1 hồ sơ (bước 6.3; GĐ 11.1: bảng dùng chung renderDocTable ở DocsUi.html).
+function renderChecklist(c) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'visa-docs-h');
+  const h = el('h3', null, fmt('visa.docTitle', { ma: c.ma })); h.id = 'visa-docs-h';
+  box.append(h, renderDocTable({ key: 'case_id', id: c.id, personId: c.person_id }), el('div', 'muted', t('visa.docNote')));
+  return box;
+}
+
+// ---- Bước 6.4 (D-067): tệp của 1 dòng checklist — tải lên, mở (lấy link Drive, có nhật ký), bỏ (ẩn, tệp Drive vẫn giữ) ----
+const UPLOAD_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
+const UPLOAD_MAX = 10 * 1024 * 1024;
+
+function reloadFiles() {
+  runServer('listRecords', ['FILE'], (rows) => { company.files = rows; render(); }, (msg) => { visa.error = msg; render(); });
+}
+
+function fileSizeText(n) {
+  const b = Number(n || 0);
+  return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+}
+
+function uploadDocFile(d, file) {
+  if (UPLOAD_TYPES.indexOf(file.type) < 0) { visa.error = fmt('val.fileType', { field: t('field.ten_file') }); render(); return; }
+  if (file.size > UPLOAD_MAX) { visa.error = fmt('val.fileSize', { field: t('field.ten_file') }); render(); return; }
+  visa.uploading = d.id; visa.error = null; render();
+  const reader = new FileReader();
+  reader.onload = () => {
+    const b64 = String(reader.result).split(',')[1] || '';
+    runServer('uploadCaseFile', [d.id, { name: file.name, mime: file.type, base64: b64 }],
+      () => { visa.uploading = null; reloadFiles(); },
+      (msg) => { visa.uploading = null; visa.error = msg; render(); });
+  };
+  reader.onerror = () => { visa.uploading = null; visa.error = t('visa.fileReadErr'); render(); };
+  reader.readAsDataURL(file);
+}
+
+function docFiles(d, name) {
+  const box = el('div', 'stack tight');
+  (company.files || []).filter((f) => f.doi_tuong_id === d.id && !f.da_an).sort(byMa).forEach((f) => {
+    const line = el('div', 'file-line');
+    if (!isOwnerUi) {
+      line.append(el('span', null, f.ten_file)); // GĐ 10: tệp nằm trong Drive của chủ, không chia sẻ → chỉ chủ mở được
+    } else if (visa.links[f.id]) {
+      const a = el('a', null, f.ten_file + ' ↗'); a.href = visa.links[f.id]; a.target = '_blank'; a.rel = 'noopener';
+      line.append(a);
+    } else {
+      const open = el('button', 'link-btn', f.ten_file);
+      open.type = 'button'; open.setAttribute('aria-label', t('visa.fileOpen') + ' ' + f.ten_file);
+      open.addEventListener('click', () => runServer('getFileLink', [f.id], (res) => { visa.links[f.id] = res.url; render(); }, (msg) => { visa.error = msg; render(); }));
+      line.append(open);
+    }
+    line.append(el('span', 'muted', ' ' + fileSizeText(f.kich_thuoc) + ' '));
+    const drop = el('button', 'btn small', t('visa.fileRemove'));
+    drop.type = 'button'; drop.disabled = visa.saving;
+    drop.setAttribute('aria-label', t('visa.fileRemove') + ' ' + f.ten_file);
+    drop.addEventListener('click', () => { visa.saving = true; render(); runServer('setHidden', ['FILE', f.id, true, f.sua_luc],
+      () => { visa.saving = false; reloadFiles(); }, (msg) => { visa.saving = false; visa.error = msg; render(); }); });
+    line.append(drop);
+    box.append(line);
+  });
+  if (visa.uploading === d.id) { box.append(el('div', 'muted', t('visa.uploading'))); return box; }
+  const lab = el('label', 'btn small upload-btn', t('visa.fileUpload'));
+  const input = el('input'); input.type = 'file'; input.accept = '.pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png';
+  input.setAttribute('aria-label', t('visa.fileUpload') + ' ' + name);
+  input.disabled = !!visa.uploading;
+  input.addEventListener('change', () => { if (input.files && input.files[0]) uploadDocFile(d, input.files[0]); });
+  lab.append(input);
+  box.append(lab);
+  return box;
+}
+
+// ---- Cài đặt → Mẫu checklist giấy tờ theo thủ tục (bước 6.3) ----
+function loadChecklistTemplates(savedLoai) {
+  runServer('getChecklistTemplates', [], (res) => { vtpl.data = res; if (savedLoai) delete vtpl.edits[savedLoai]; render(); }, (msg) => { vtpl.error = msg; render(); });
+}
+
+function renderChecklistSettings() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'vtpl-h');
+  const h = el('h2', null, t('visa.tplTitle')); h.id = 'vtpl-h';
+  box.append(h, el('div', 'muted', t('visa.tplDesc')));
+  if (vtpl.error) box.append(el('div', 'msg-err', vtpl.error));
+  if (!vtpl.data) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const typeLabel = el('label', 'field', t('field.loai_thu_tuc'));
+  typeLabel.style.maxWidth = '320px';
+  const typeSel = el('select');
+  CHOICES.visaTypes.concat(CHOICES.preTypes.map((k) => 'pre_' + k)).forEach((k) => { const o = el('option', null, k.indexOf('pre_') === 0 ? t('nav.prep') + ' · ' + t('pre.type.' + k.slice(4)) : t('visa.type.' + k)); o.value = k; typeSel.append(o); });
+  typeSel.value = vtpl.loai;
+  typeSel.addEventListener('change', () => { vtpl.loai = typeSel.value; vtpl.saved = false; render(); });
+  typeLabel.append(typeSel);
+  box.append(typeLabel);
+  const cur = vtpl.data[vtpl.loai];
+  const ids = vtpl.edits[vtpl.loai] || cur.ids.slice();
+  if (!cur.custom) box.append(el('div', 'muted', t('visa.tplDefault')));
+  const today = todayJst();
+  const items = lk.rows.filter((r) => r.loai === 'giay_to' && !r.da_an && lookupState(r, today) === 'active').sort(byMa);
+  const set = el('fieldset', 'field wide');
+  set.append(el('legend', null, t('field.giay_to')));
+  const list = el('div', 'check-list');
+  if (!items.length) list.append(el('span', 'muted', t('visa.tplNoItems')));
+  items.forEach((r) => {
+    const lab = el('label', 'check');
+    const cb = el('input'); cb.type = 'checkbox'; cb.value = r.id; cb.checked = ids.indexOf(r.id) >= 0;
+    cb.addEventListener('change', () => {
+      const next = ids.filter((x) => x !== r.id);
+      if (cb.checked) next.push(r.id);
+      ids.length = 0; next.forEach((x) => ids.push(x));
+      vtpl.edits[vtpl.loai] = ids; vtpl.saved = false;
+    });
+    lab.append(cb, document.createTextNode(lookupName(r)));
+    list.append(lab);
+  });
+  set.append(list);
+  box.append(set);
+  const save = el('button', 'btn-primary', vtpl.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'button'; save.disabled = vtpl.saving;
+  save.addEventListener('click', () => {
+    const loai = vtpl.loai;
+    vtpl.saving = true; vtpl.error = null; vtpl.saved = false; render();
+    runServer('saveChecklistTemplate', [loai, ids.slice(), cur.sua_luc],
+      () => { vtpl.saving = false; vtpl.saved = true; loadChecklistTemplates(loai); },
+      (msg) => { vtpl.saving = false; vtpl.error = msg; if (msg === t('err.CONFLICT')) loadChecklistTemplates(loai); render(); });
+  });
+  box.append(save);
+  if (vtpl.saved) box.append(el('div', 'msg-ok', t('visa.tplSaved')));
+  return box;
+}
+
+function daysSince(ymd, today) {
+  const d = (s) => { const p = s.split('-').map(Number); return Date.UTC(p[0], p[1] - 1, p[2]); };
+  return Math.round((d(today) - d(ymd)) / 86400000);
+}
+
+const byNewest = (a, b) => (a.ma < b.ma ? 1 : -1);
+
+// Mục "Hồ sơ visa" trong hồ sơ người.
+function renderPersonCases(p) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'person-visa-h');
+  const bar = el('div', 'toolbar');
+  const h = el('h2', null, t('nav.visa')); h.id = 'person-visa-h';
+  const add = el('button', 'btn-primary', t('visa.add'));
+  add.type = 'button'; add.disabled = visa.saving || !!visa.form;
+  add.addEventListener('click', () => openCaseForm(null, p.id));
+  bar.append(h, add);
+  box.append(bar);
+  if (visa.form) box.append(renderCaseForm());
+  if (visa.error) box.append(el('div', 'msg-err', visa.error));
+  const list = (company.cases || []).filter((r) => r.person_id === p.id && !r.da_an).sort(byNewest);
+  box.append(list.length ? caseTable(list, false) : el('div', 'muted', t('visa.empty')));
+  return box;
+}
+
+// ---- Trang Hồ sơ visa ----
+function visibleCases() {
+  const q = plain(visa.q.trim());
+  return (company.cases || [])
+    .filter((r) => visa.showHidden || !r.da_an)
+    .filter((r) => visa.showEnded || CHOICES.visaEnded.indexOf(r.trang_thai) < 0)
+    .filter((r) => !q || [r.ma, personName(r.person_id), r.noi_nop].some((x) => plain(x).indexOf(q) >= 0))
+    .filter((r) => !visa.fType || r.loai_thu_tuc === visa.fType)
+    .filter((r) => !visa.fStatus || r.trang_thai === visa.fStatus)
+    .filter((r) => !visa.fStaff || r.phu_trach_staff_id === visa.fStaff)
+    .sort(byNewest);
+}
+
+function caseListEl() {
+  const box = el('div', 'stack');
+  if (visa.loading && !(company.cases || []).length) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const list = visibleCases();
+  box.append(el('div', 'muted', fmt('visa.count', { n: list.length, total: (company.cases || []).filter((r) => !r.da_an).length })));
+  box.append(list.length ? caseTable(list, true) : el('div', 'muted', t('visa.empty')));
+  return box;
+}
+
+function refreshCaseList() { if (visa.listBox) visa.listBox.replaceChildren(caseListEl()); }
+
+function visaFilter(key, label, options) {
+  const sel = el('select');
+  sel.setAttribute('aria-label', t(label));
+  [['', t(label) + ': ' + t('company.all')]].concat(options).forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; sel.append(op); });
+  sel.value = visa[key];
+  sel.addEventListener('change', () => { visa[key] = sel.value; refreshCaseList(); });
+  return sel;
+}
+
+function visaCheck(key, label) {
+  const lab = el('label', 'check');
+  const cb = el('input'); cb.type = 'checkbox'; cb.checked = visa[key];
+  cb.addEventListener('change', () => { visa[key] = cb.checked; refreshCaseList(); });
+  lab.append(cb, document.createTextNode(t(label)));
+  return lab;
+}
+
+function renderVisaPage() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  const root = el('div', 'stack');
+  const bar = el('div', 'toolbar');
+  const filters = el('div', 'filters');
+  const search = el('input'); search.type = 'search'; search.value = visa.q;
+  search.placeholder = t('visa.search'); search.setAttribute('aria-label', t('visa.search'));
+  search.addEventListener('input', () => { visa.q = search.value; refreshCaseList(); });
+  filters.append(search,
+    visaFilter('fType', 'field.loai_thu_tuc', CHOICES.visaTypes.map((s) => [s, t('visa.type.' + s)])),
+    visaFilter('fStatus', 'field.trang_thai', CHOICES.visaStatuses.map((s) => [s, t('visa.status.' + s)])),
+    visaFilter('fStaff', 'company.filterStaff', company.staff.map((s) => [s.id, staffLabel(s.id)])),
+    visaCheck('showEnded', 'visa.showEnded'), visaCheck('showHidden', 'staff.showHidden'));
+  const add = el('button', 'btn-primary', t('visa.add'));
+  add.type = 'button'; add.disabled = visa.saving || !!visa.form;
+  add.addEventListener('click', () => openCaseForm(null, ''));
+  bar.append(filters, add);
+  root.append(bar);
+  if (visa.form) root.append(renderCaseForm());
+  if (visa.error) root.append(el('div', 'msg-err', visa.error));
+  if (visa.saving && !visa.form) root.append(el('div', 'muted', t('ui.saving')));
+  visa.listBox = el('div');
+  visa.listBox.append(caseListEl());
+  root.append(visa.listBox, el('div', 'muted', t('visa.note')));
+  body.append(root);
+}
+</script>

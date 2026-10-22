@@ -1,0 +1,150 @@
+<script>
+// D-079: Cài đặt → Nhập file quản lý cũ (Excel .xlsx hoặc CSV) — chỉ chủ. Đọc file trong trình duyệt (XlsxUi), nhận ra 2 sheet theo tiêu đề cột,
+// gửi từng lô 200 dòng cho importLegacy: kiểm tra trước (không ghi), rồi sao lưu → nhập công ty → nhập người lao động.
+const LEGACY_CHUNK = 200;
+const LEGACY_KINDS = [['company', ['法人名']], ['worker', ['スタッフ名', '勤務状況']]];
+let legacy = { file: '', parts: null, busy: false, step: '', check: null, done: null, error: null };
+
+const legacyHdr = (s) => String(s || '').normalize('NFKC').replace(/\s+/g, '');
+
+// Tìm dòng tiêu đề (trong 15 dòng đầu) có đủ cột nhận dạng. Ô tiêu đề trống → lấy chữ phía trên cùng cột (bỏ ô dạng "tổng: 999"), vd. 名義.
+function legacyFind(sheet, need) {
+  for (let h = 0; h < Math.min(15, sheet.rows.length); h++) {
+    const row = (sheet.rows[h] || []).map(legacyHdr);
+    if (!need.every((n) => row.indexOf(n) >= 0)) continue;
+    const header = row.map((x, i) => {
+      if (x) return x;
+      for (let u = 0; u < h; u++) { const v = legacyHdr((sheet.rows[u] || [])[i]); if (v && v.indexOf(':') < 0) return v; }
+      return '_c' + i;
+    });
+    const rows = []; const lines = [];
+    sheet.rows.slice(h + 1).forEach((r, k) => {
+      if (!(r || []).some((v) => String(v).trim() !== '')) return;
+      const o = {};
+      header.forEach((name, i) => { const v = (r || [])[i]; if (v !== undefined && String(v).trim() !== '') o[name] = v; });
+      rows.push(o); lines.push(h + 2 + k); // số dòng trong Excel
+    });
+    return { sheet: sheet.name, rows: rows, lines: lines };
+  }
+  return null;
+}
+
+function legacyPick(file) {
+  legacy = { file: file.name, parts: null, busy: true, step: t('legacy.reading'), check: null, done: null, error: null }; render();
+  readTableFile(file, (sheets) => {
+    const parts = {};
+    LEGACY_KINDS.forEach((k) => { sheets.some((s) => { const f = legacyFind(s, k[1]); if (f && f.rows.length) parts[k[0]] = f; return !!f; }); });
+    legacy.busy = false; legacy.step = '';
+    if (!parts.company && !parts.worker) legacy.error = t('legacy.notFound'); else legacy.parts = parts;
+    render();
+  }, (e) => { legacy.busy = false; legacy.step = ''; legacy.error = errorText(e); render(); });
+}
+
+const legacyEmpty = () => ({ created: 0, exists: 0, skipped: 0, addedEmployment: 0, errors: [], warn: {}, emp: {}, newStaff: [], newCompanies: [], pending: [] });
+
+// Gửi lần lượt từng lô của 1 loại; gộp kết quả. Xong gọi next(tổng hợp).
+function legacySend(kind, dryRun, sum, next, pending) {
+  const part = legacy.parts[kind];
+  const step = (start) => {
+    if (start >= part.rows.length) { next(); return; }
+    legacy.step = fmt('legacy.progress', { what: t('legacy.kind.' + kind), n: Math.min(start + LEGACY_CHUNK, part.rows.length), total: part.rows.length }); render();
+    runServer('importLegacy', [kind, part.rows.slice(start, start + LEGACY_CHUNK), dryRun, start, pending || null], (res) => {
+      res.results.forEach((r) => {
+        const line = part.lines[r.row - 1];
+        if (!r.ok) { sum.errors.push({ kind: kind, line: line, error: r.error }); return; }
+        if (r.action === 'created' && r.name) sum.pending.push([r.name, r.facility || '']);
+        sum[r.action] = (sum[r.action] || 0) + 1;
+        (r.warnings || []).forEach((w) => { sum.warn[w] = (sum.warn[w] || 0) + 1; });
+        if (r.emp) sum.emp[r.emp] = (sum.emp[r.emp] || 0) + 1;
+      });
+      res.newStaff.forEach((n) => { if (sum.newStaff.indexOf(n) < 0) sum.newStaff.push(n); });
+      res.newCompanies.forEach((n) => { if (sum.newCompanies.indexOf(n) < 0) sum.newCompanies.push(n); });
+      step(start + LEGACY_CHUNK);
+    }, (msg) => { legacy.busy = false; legacy.step = ''; legacy.error = msg; render(); });
+  };
+  step(0);
+}
+
+// Công ty trước (người lao động cần công ty), rồi người lao động.
+function legacyRun(dryRun) {
+  const kinds = LEGACY_KINDS.map((k) => k[0]).filter((k) => legacy.parts[k]);
+  const sums = {};
+  legacy.busy = true; legacy.error = null; legacy.done = null; if (dryRun) legacy.check = null; render();
+  const go = (i) => {
+    if (i >= kinds.length) { legacy.busy = false; legacy.step = ''; if (dryRun) legacy.check = sums; else legacy.done = sums; render(); return; }
+    sums[kinds[i]] = legacyEmpty();
+    // Kiểm tra người lao động: tính cả các công ty sheet 会社情報 sẽ tạo (chưa ghi khi kiểm tra).
+    legacySend(kinds[i], dryRun, sums[kinds[i]], () => go(i + 1), dryRun && kinds[i] === 'worker' && sums.company ? sums.company.pending : null);
+  };
+  if (dryRun) { go(0); return; }
+  legacy.step = t('legacy.backup'); render();
+  runServer('backupNow', [], () => go(0), (msg) => { legacy.busy = false; legacy.step = ''; legacy.error = msg; render(); });
+}
+
+function legacySummary(kind, s, dryRun) {
+  const box = el('div', 'stack');
+  box.append(el('h3', null, t('legacy.kind.' + kind) + ' — ' + (dryRun ? t('legacy.checkTitle') : t('legacy.doneTitle'))));
+  const line = fmt('legacy.counts.' + kind, { created: s.created, exists: s.exists, skipped: s.skipped, added: s.addedEmployment || 0, bad: s.errors.length });
+  box.append(el('div', s.errors.length ? 'msg-warn' : 'msg-ok', line));
+  if (kind === 'worker') {
+    box.append(el('div', 'muted', fmt('legacy.empStates', { dang_lam: s.emp.dang_lam || 0, cho: s.emp.cho_vao_lam || 0, nghi: s.emp.da_nghi || 0 })));
+  }
+  const warns = Object.keys(s.warn);
+  if (warns.length) {
+    const ul = el('ul', 'history');
+    warns.forEach((w) => ul.append(el('li', null, fmt('legacy.warn.' + w, { n: s.warn[w] }))));
+    box.append(ul);
+  }
+  [['newStaff', dryRun ? 'legacy.newStaff' : 'legacy.newStaffDone'], ['newCompanies', dryRun ? 'legacy.newCompanies' : 'legacy.newCompaniesDone']].forEach((x) => {
+    if (!s[x[0]].length) return;
+    const d = el('details');
+    d.append(el('summary', null, fmt(x[1], { n: s[x[0]].length })), el('div', 'muted pre', s[x[0]].join('\n')));
+    box.append(d);
+  });
+  if (s.errors.length) {
+    const ul = el('ul', 'history');
+    s.errors.slice(0, 50).forEach((e) => ul.append(el('li', null, fmt('imp.rowErr', { row: e.line, msg: importError(e) }))));
+    box.append(ul);
+  }
+  return box;
+}
+
+function renderLegacy() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'legacy-h');
+  const h = el('h2', null, t('legacy.title')); h.id = 'legacy-h';
+  box.append(h, el('div', 'muted pre', t('legacy.desc')));
+  const bar = el('div', 'filters');
+  const file = el('label', 'btn upload-btn', t('legacy.pick'));
+  const input = el('input'); input.type = 'file'; input.accept = '.xlsx,.csv'; input.setAttribute('aria-label', t('legacy.pick'));
+  input.disabled = legacy.busy;
+  input.addEventListener('change', () => { const f = input.files && input.files[0]; if (f) legacyPick(f); });
+  file.append(input);
+  bar.append(file);
+  box.append(bar);
+  if (legacy.file) box.append(el('div', 'muted', legacy.file));
+  if (legacy.parts) {
+    LEGACY_KINDS.forEach((k) => {
+      const p = legacy.parts[k[0]];
+      box.append(el('div', p ? null : 'muted', p ? fmt('legacy.found', { what: t('legacy.kind.' + k[0]), sheet: p.sheet, n: p.rows.length }) : fmt('legacy.missing', { what: t('legacy.kind.' + k[0]) })));
+    });
+    const acts = el('div', 'filters');
+    const check = el('button', 'btn', t('imp.check'));
+    check.type = 'button'; check.disabled = legacy.busy;
+    check.addEventListener('click', () => legacyRun(true));
+    const go = el('button', 'btn-primary', t('legacy.run'));
+    go.type = 'button'; go.disabled = legacy.busy || !legacy.check || !!legacy.done;
+    go.addEventListener('click', () => legacyRun(false));
+    acts.append(check, go);
+    box.append(acts);
+  }
+  if (legacy.step) box.append(el('div', 'muted', legacy.step));
+  if (legacy.error) box.append(el('div', 'msg-err', legacy.error));
+  const show = legacy.done || legacy.check;
+  if (show) {
+    Object.keys(show).forEach((k) => box.append(legacySummary(k, show[k], !legacy.done)));
+    box.append(el('div', 'muted', t(legacy.done ? 'legacy.afterDone' : 'legacy.afterCheck')));
+  }
+  return box;
+}
+</script>

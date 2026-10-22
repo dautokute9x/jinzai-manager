@@ -1,0 +1,214 @@
+<script>
+// 9a (D-070): Cài đặt → Nhập dữ liệu từ CSV (Sheets cũ: Tệp → Tải xuống → CSV). 9b (D-071): Cài đặt → Xuất dữ liệu ra Google Sheets.
+// Dùng t(), fmt(), el(), render(), runServer(), I18N, lang của Index.html.
+const IMPORT_ORDER = ['STAFF', 'COMPANY', 'CONTACT', 'JOB_ORDER', 'PERSON'];
+const IMPORT_CHUNK = 100;
+// Ô lựa chọn cố định: nhận mã hoặc chữ hiển thị (VI / JA) → đổi sang mã trước khi gửi.
+const IMPORT_CHOICES = {
+  STAFF: { trang_thai: ['staff.status.', ['dang_lam', 'da_nghi']] },
+  COMPANY: { trang_thai: ['company.status.', ['dang_giao_dich', 'tiem_nang', 'tam_dung', 'ngung']] },
+  JOB_ORDER: { trang_thai_don: ['job.status.', ['dang_mo', 'tam_dung', 'da_du', 'da_huy']] },
+  PERSON: { gioi_tinh: ['person.gender.', ['nam', 'nu', 'khac']], noi_o: ['person.noiO.', ['nhat', 'nuoc_ngoai']],
+    trang_thai_sang_loc: ['person.status.', ['moi_nhan', 'dang_kiem_tra', 'san_sang', 'tam_dung', 'khong_phu_hop']] },
+};
+let imp = { fields: null, table: 'STAFF', csv: null, map: {}, results: null, busy: false, error: null, done: null, sheets: null, sheet: 0 };
+
+// D-079: file .xlsx (nhiều sheet) hoặc .csv → bảng của sheet đang chọn. Dòng tiêu đề = dòng có nhiều ô nhất trong 10 dòng đầu.
+function impUseSheet(i) {
+  const rows = (imp.sheets[i].rows || []).map((r) => (r || []).map((x) => String(x === undefined ? '' : x)));
+  let hd = 0;
+  rows.slice(0, 10).forEach((r, k) => { if (r.filter((x) => x.trim()).length > rows[hd].filter((x) => x.trim()).length) hd = k; });
+  const body = rows.slice(hd + 1).filter((r) => r.some((x) => x.trim() !== ''));
+  imp.sheet = i; imp.results = null; imp.done = null; imp.error = null;
+  if (!rows.length || !body.length) { imp.csv = null; imp.error = t('imp.empty'); return; }
+  imp.csv = [rows[hd]].concat(body);
+  imp.map = autoMap(imp.csv[0], imp.fields[imp.table] || []);
+}
+let exp = { busy: null, result: null, error: null, month: '' };
+
+// CSV theo RFC 4180: dấu phẩy, ngoặc kép, xuống dòng trong ô, BOM. Trả mảng dòng (mảng ô); bỏ dòng trống.
+function parseCsv(text) {
+  const s = String(text || '').replace(/^﻿/, '');
+  const rows = []; let row = []; let cell = ''; let q = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) {
+      if (c === '"' && s[i + 1] === '"') { cell += '"'; i++; } else if (c === '"') q = false; else cell += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && s[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter((r) => r.some((x) => String(x).trim() !== ''));
+}
+
+const impNorm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[đĐ]/g, 'd').toLowerCase().replace(/[\s*:（）()]/g, '');
+
+// Ghép tự động: tiêu đề cột = mã trường, hoặc nhãn VI / JA của trường.
+function autoMap(header, fields) {
+  const map = {};
+  header.forEach((h, i) => {
+    const n = impNorm(h);
+    const bare = (s) => impNorm(String(s || '').replace(/[（(][^）)]*[）)]/g, '')); // "Tên viết tắt (略称)" → "tenviettat"
+    const f = fields.find((x) => [x, I18N.vi['field.' + x], I18N.ja['field.' + x]].some((l) => impNorm(l) === n || (l && bare(l) === n)));
+    if (f && !Object.keys(map).some((k) => map[k] === f)) map[i] = f;
+  });
+  return map;
+}
+
+function toCode(table, field, v) {
+  const c = (IMPORT_CHOICES[table] || {})[field];
+  const s = String(v || '').trim();
+  if (!c || !s) return s;
+  const hit = c[1].find((code) => code === s || impNorm(I18N.vi[c[0] + code]) === impNorm(s) || impNorm(I18N.ja[c[0] + code]) === impNorm(s));
+  return hit || s;
+}
+
+function importPayload() {
+  const body = imp.csv.slice(1);
+  return body.map((r) => {
+    const o = {};
+    Object.keys(imp.map).forEach((i) => { const f = imp.map[i]; if (f) o[f] = toCode(imp.table, f, r[i]); });
+    if (imp.table === 'CONTACT' && o.lien_he_chinh) o.lien_he_chinh = /^(y|yes|x|o|○|có|co|1|true|主)$/i.test(o.lien_he_chinh.trim()) ? 'Y' : '';
+    return o;
+  });
+}
+
+// Gửi từng lô; dryRun → chỉ kiểm tra. Kết quả gộp theo số dòng CSV (dòng 2 = dòng dữ liệu đầu tiên).
+function runImport(dryRun) {
+  const rows = importPayload();
+  imp.busy = true; imp.error = null; imp.results = []; imp.done = null; render();
+  const step = (start, created) => {
+    if (start >= rows.length) { imp.busy = false; imp.done = { dryRun: dryRun, created: created }; render(); return; }
+    runServer('importRows', [imp.table, rows.slice(start, start + IMPORT_CHUNK), dryRun, start],
+      (res) => { res.results.forEach((r) => imp.results.push(Object.assign(r, { row: r.row + start + 1 }))); render(); step(start + IMPORT_CHUNK, created + res.created); },
+      (msg) => { imp.busy = false; imp.error = msg; render(); });
+  };
+  step(0, 0);
+}
+
+function importError(r) {
+  const e = r.error || {};
+  if (e.code === 'other') return e.msg;
+  return fmt('val.' + e.code, { field: t('field.' + e.field), max: e.max, min: e.min, ma: e.ma });
+}
+
+function loadImportFields() {
+  runServer('getImportFields', [], (res) => { imp.fields = res; render(); }, (msg) => { imp.error = msg; render(); });
+}
+
+function renderImport() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'imp-h');
+  const h = el('h2', null, t('imp.title')); h.id = 'imp-h';
+  box.append(h, el('div', 'muted pre', t('imp.desc')));
+  if (!imp.fields) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const bar = el('div', 'filters');
+  const sel = el('select');
+  sel.setAttribute('aria-label', t('imp.table'));
+  IMPORT_ORDER.forEach((k, i) => { const o = el('option', null, (i + 1) + '. ' + t('imp.table.' + k)); o.value = k; sel.append(o); });
+  sel.value = imp.table;
+  sel.addEventListener('change', () => { imp.table = sel.value; imp.map = imp.csv ? autoMap(imp.csv[0], imp.fields[imp.table] || []) : {}; imp.results = null; imp.done = null; render(); });
+  const file = el('label', 'btn upload-btn', t('imp.pick'));
+  const input = el('input'); input.type = 'file'; input.accept = '.csv,.xlsx,text/csv'; input.setAttribute('aria-label', t('imp.pick'));
+  input.addEventListener('change', () => {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    readTableFile(f, (sheets) => { imp.sheets = sheets; impUseSheet(0); render(); },
+      (e) => { imp.error = errorText(e); imp.csv = null; render(); });
+  });
+  file.append(input);
+  bar.append(sel, file);
+  if (imp.sheets && imp.sheets.length > 1) {
+    const sh = el('select');
+    sh.setAttribute('aria-label', t('imp.sheet'));
+    imp.sheets.forEach((s, i) => { const o = el('option', null, s.name); o.value = String(i); sh.append(o); });
+    sh.value = String(imp.sheet);
+    sh.addEventListener('change', () => { impUseSheet(Number(sh.value)); render(); });
+    bar.append(sh);
+  }
+  box.append(bar);
+  if (imp.error) box.append(el('div', 'msg-err', imp.error));
+  if (!imp.csv) return box;
+  const fields = imp.fields[imp.table] || [];
+  box.append(el('div', 'muted', fmt('imp.loaded', { n: imp.csv.length - 1, c: imp.csv[0].length })));
+  // Ghép cột
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['imp.col.csv', 'imp.col.sample', 'imp.col.field'];
+  const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  imp.csv[0].forEach((hd, i) => {
+    const tr = el('tr');
+    const c = (k, node) => { const td = el('td'); td.dataset.label = t(cols[k]); td.append(node); return td; };
+    const s = el('select', 'cell-input');
+    s.setAttribute('aria-label', t('imp.col.field') + ' ' + hd);
+    [['', t('imp.skip')]].concat(fields.map((f) => [f, t('field.' + f)])).forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; s.append(op); });
+    s.value = imp.map[i] || '';
+    s.addEventListener('change', () => { imp.map[i] = s.value; imp.results = null; imp.done = null; });
+    tr.append(c(0, document.createTextNode(hd)), c(1, document.createTextNode(imp.csv.slice(1, 3).map((r) => r[i] || '').join(' | '))), c(2, s));
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap);
+  const acts = el('div', 'filters');
+  const check = el('button', 'btn', imp.busy ? t('ui.saving') : t('imp.check'));
+  check.type = 'button'; check.disabled = imp.busy;
+  check.addEventListener('click', () => runImport(true));
+  const go = el('button', 'btn-primary', t('imp.run'));
+  go.type = 'button';
+  go.disabled = imp.busy || !imp.done || !imp.done.dryRun || !imp.results.some((r) => r.ok);
+  go.addEventListener('click', () => runImport(false));
+  acts.append(check, go);
+  box.append(acts);
+  if (imp.results && imp.results.length) {
+    const ok = imp.results.filter((r) => r.ok).length;
+    const bad = imp.results.filter((r) => !r.ok);
+    box.append(el('div', bad.length ? 'msg-warn' : 'msg-ok', imp.done && !imp.done.dryRun ? fmt('imp.created', { n: imp.done.created, bad: bad.length })
+      : fmt('imp.checked', { ok: ok, bad: bad.length })));
+    if (bad.length) {
+      const ul = el('ul', 'history');
+      bad.slice(0, 50).forEach((r) => ul.append(el('li', null, fmt('imp.rowErr', { row: r.row, msg: importError(r) }))));
+      box.append(ul);
+      if (bad.length > 50) box.append(el('div', 'muted', fmt('imp.more', { n: bad.length - 50 })));
+    }
+  }
+  return box;
+}
+
+// ---- 9b: xuất dữ liệu ----
+const EXPORT_KINDS_UI = ['people', 'companies', 'jobs', 'applications', 'working', 'sales', 'invoices'];
+
+function renderExport() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'exp-h');
+  const h = el('h2', null, t('exp.title')); h.id = 'exp-h';
+  box.append(h, el('div', 'muted', t('exp.desc')));
+  const list = el('div', 'filters');
+  const month = el('input'); month.type = 'month'; month.value = exp.month || todayJst().slice(0, 7);
+  month.setAttribute('aria-label', t('exp.month'));
+  month.addEventListener('change', () => { exp.month = month.value; });
+  EXPORT_KINDS_UI.forEach((k) => {
+    const b = el('button', 'btn', exp.busy === k ? t('ui.saving') : t('exp.kind.' + k));
+    b.type = 'button'; b.disabled = !!exp.busy;
+    b.addEventListener('click', () => {
+      exp.busy = k; exp.result = null; exp.error = null; render();
+      runServer('exportData', [k, { month: month.value }], (res) => { exp.busy = null; exp.result = res; render(); }, (msg) => { exp.busy = null; exp.error = msg; render(); });
+    });
+    list.append(b);
+    if (k === 'working') list.append(month);
+  });
+  box.append(list);
+  if (exp.error) box.append(el('div', 'msg-err', exp.error));
+  if (exp.result) {
+    const ok = el('div', 'msg-ok', fmt('exp.done', { n: exp.result.rows, name: exp.result.name }) + ' ');
+    const a = el('a', null, t('exp.open') + ' ↗'); a.href = exp.result.url; a.target = '_blank'; a.rel = 'noopener';
+    ok.append(a);
+    box.append(ok);
+  }
+  return box;
+}
+</script>

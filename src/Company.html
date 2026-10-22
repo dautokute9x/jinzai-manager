@@ -1,0 +1,336 @@
+<script>
+// Bước 2.1: trang Công ty — danh sách, tìm, lọc, thêm/sửa/ẩn (D-045). Bước 2.2: trang chi tiết công ty.
+// Dùng t(), fmt(), el(), render(), runServer(), CHOICES, lang của Index.html.
+const COMPANY_FIELDS = ['ten_phap_nhan', 'ten_viet_tat', 'ten_phien_am', 'ma_buu_dien', 'tinh_thanh', 'dia_chi', 'dien_thoai',
+  'linh_vuc', 'sales_staff_id', 'support_staff_id', 'trang_thai', 'ghi_chu', 'phap_nhan_so', 'ten_co_so', 'nganh_nghe'];
+let company = { rows: [], staff: [], lookup: [], contacts: [], jobs: [], apps: [], emps: [], loading: 0, saving: false, error: null, form: null, fieldErr: null,
+  q: '', fStaff: '', fStatus: '', showHidden: false, listBox: null, detailId: null };
+
+const idList = (v) => String(v || '').split(',').filter((x) => x);
+const norm = (s) => String(s || '').normalize('NFKC').toLowerCase();
+function todayJst() { return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).slice(0, 10); }
+function lookupName(r) { return (lang === 'ja' && r.ten_ja) || r.ten_vi; }
+function lookupState(r, today) {
+  if (r.tu_ngay && today < r.tu_ngay) return 'pending';
+  if (r.den_ngay && today > r.den_ngay) return 'expired';
+  return 'active';
+}
+
+// Lỗi kiểm tra từ máy chủ → tên ô bị lỗi (để hiện lỗi ngay dưới ô đó).
+function validationField(raw) {
+  const m = String((raw && raw.message) || raw || '').match(/VALIDATION\|(\{.*\})/);
+  return m ? JSON.parse(m[1]).field : null;
+}
+
+// Tải lại công ty + nhân viên + danh mục + người liên hệ + đơn tuyển mỗi lần mở trang Công ty / Đơn tuyển.
+function loadCompany() {
+  company.loading = can('hop_dong') ? 8 : 7; company.error = null;
+  const done = (key) => (rows) => { company[key] = rows; company.loading--; render(); };
+  const fail = (msg) => { company.loading--; company.error = msg; render(); };
+  runServer('listRecords', ['COMPANY'], done('rows'), fail);
+  runServer('listRecords', ['STAFF'], done('staff'), fail);
+  runServer('listRecords', ['LOOKUP'], done('lookup'), fail);
+  runServer('listRecords', ['CONTACT'], done('contacts'), fail);
+  runServer('listRecords', ['JOB_ORDER'], done('jobs'), fail);
+  runServer('listRecords', ['APPLICATION'], done('apps'), fail); // bước 3.2: số đang giới thiệu của từng đơn
+  runServer('listRecords', ['EMPLOYMENT'], done('emps'), fail); // bước 3.4: đã vào làm / còn thiếu
+  if (can('hop_dong')) runServer('listRecords', ['CONTRACT'], done('contracts'), fail); // GĐ 5: hợp đồng & phí (D-077: theo quyền)
+}
+
+function saveCompany(fn, args, closeForm) {
+  company.saving = true; company.error = null; company.fieldErr = null; render();
+  runServer(fn, args,
+    () => { company.saving = false; if (closeForm) company.form = null; loadCompany(); },
+    (msg, raw) => {
+      company.saving = false;
+      const field = validationField(raw);
+      if (field && company.form) company.fieldErr = { field: field, msg: msg };
+      else company.error = msg;
+      if (msg === t('err.CONFLICT')) { company.form = null; loadCompany(); }
+      render();
+    });
+}
+
+function submitCompany() {
+  const f = company.form;
+  if (!f.data.ten_phap_nhan.trim()) {
+    company.fieldErr = { field: 'ten_phap_nhan', msg: fmt('val.required', { field: t('field.ten_phap_nhan') }) };
+    render();
+    return;
+  }
+  if (f.id) saveCompany('updateRecord', ['COMPANY', f.id, f.data, f.sua_luc], true);
+  else saveCompany('createRecord', ['COMPANY', f.data], true);
+}
+
+function openCompanyForm(row) {
+  const data = {};
+  COMPANY_FIELDS.forEach((k) => { data[k] = row ? row[k] || '' : ''; });
+  if (!row) data.trang_thai = 'dang_giao_dich';
+  company.form = { id: row ? row.id : null, ma: row ? row.ma : '', sua_luc: row ? row.sua_luc : '', data: data, justOpened: true };
+  company.error = null; company.fieldErr = null;
+  render();
+}
+
+// ---- Tên hiển thị ----
+function staffLabel(id) {
+  const s = company.staff.find((x) => x.id === id);
+  if (!s) return id;
+  return s.ho_ten + (s.trang_thai !== 'dang_lam' || s.da_an ? ' (' + t('company.inactiveTag') + ')' : '');
+}
+function lookupLabel(id) {
+  const r = company.lookup.find((x) => x.id === id);
+  return r ? lookupName(r) : id;
+}
+
+// Được chọn mới: nhân viên đang làm, chưa ẩn; lĩnh vực chưa ẩn, đang hiệu lực. Mục đã chọn từ trước luôn giữ (Q6).
+function staffOptions(chosen) {
+  return company.staff
+    .filter((s) => (s.trang_thai === 'dang_lam' && !s.da_an) || chosen.indexOf(s.id) >= 0)
+    .map((s) => ({ id: s.id, text: s.ho_ten, tag: s.trang_thai !== 'dang_lam' || s.da_an ? t('company.inactiveTag') : '' }));
+}
+function lookupOptions(chosen) {
+  const today = todayJst();
+  return company.lookup
+    .filter((r) => r.loai === 'linh_vuc' && ((!r.da_an && lookupState(r, today) === 'active') || chosen.indexOf(r.id) >= 0))
+    .map((r) => ({ id: r.id, text: lookupName(r), tag: !r.da_an && lookupState(r, today) === 'active' ? '' : t('company.expiredTag') }));
+}
+
+// ---- Form ----
+function markFieldError(label, input, key, fe) {
+  if (!fe || fe.field !== key) return label;
+  input.setAttribute('aria-invalid', 'true');
+  const m = el('span', 'field-err', fe.msg);
+  m.id = 'err-' + key;
+  input.setAttribute('aria-describedby', m.id);
+  label.append(m);
+  setTimeout(() => input.focus(), 0);
+  return label;
+}
+
+function companyInput(f, key, opts) {
+  const label = el('label', 'field' + (opts.wide ? ' wide' : ''), t('field.' + key) + (opts.required ? ' *' : ''));
+  let input;
+  if (opts.options) {
+    input = el('select');
+    opts.options.forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; input.append(op); });
+  } else if (opts.textarea) {
+    input = el('textarea'); input.rows = 3;
+  } else {
+    input = el('input'); input.autocomplete = 'off';
+    if (opts.type) input.type = opts.type;
+  }
+  if (opts.max) input.maxLength = opts.max;
+  if (opts.placeholder) input.placeholder = opts.placeholder;
+  input.name = key;
+  input.value = f.data[key];
+  input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', () => { f.data[key] = input.value; });
+  label.append(input);
+  return markFieldError(label, input, key, opts.fe || company.fieldErr);
+}
+
+function companyChecks(f, key, options, emptyKey, fe) {
+  const set = el('fieldset', 'field wide');
+  set.append(el('legend', null, t('field.' + key)));
+  const box = el('div', 'check-list');
+  if (!options.length) box.append(el('span', 'muted', t(emptyKey)));
+  options.forEach((o) => {
+    const lab = el('label', 'check');
+    const cb = el('input'); cb.type = 'checkbox'; cb.value = o.id; cb.checked = idList(f.data[key]).indexOf(o.id) >= 0;
+    cb.addEventListener('change', () => {
+      const cur = idList(f.data[key]).filter((x) => x !== o.id);
+      if (cb.checked) cur.push(o.id);
+      f.data[key] = cur.join(',');
+    });
+    lab.append(cb, document.createTextNode(o.text));
+    if (o.tag) lab.append(el('span', 'muted', '(' + o.tag + ')'));
+    box.append(lab);
+  });
+  set.append(box);
+  return markFieldError(set, box.querySelector('input') || box, key, fe || company.fieldErr);
+}
+
+function renderCompanyForm() {
+  const f = company.form;
+  const wrap = el('section', 'stack');
+  wrap.setAttribute('aria-labelledby', 'company-form-h');
+  const h = el('h2', null, f.id ? fmt('company.editTitle', { ma: f.ma }) : t('company.newTitle')); h.id = 'company-form-h';
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitCompany(); });
+  const pref = [['', '—']].concat(CHOICES.prefectures.map((p) => [p, p]));
+  const statuses = CHOICES.companyStatuses.map((s) => [s, t('company.status.' + s)]);
+  form.append(
+    companyInput(f, 'ten_phap_nhan', { required: true, max: 200 }),
+    companyInput(f, 'ten_viet_tat', { max: 100 }),
+    companyInput(f, 'ten_phien_am', { max: 200 }),
+    companyInput(f, 'ten_co_so', { max: 200 }),
+    companyInput(f, 'phap_nhan_so', { max: 13, placeholder: '1234567890123' }),
+    companyInput(f, 'nganh_nghe', { max: 200 }),
+    companyInput(f, 'trang_thai', { options: statuses }),
+    companyInput(f, 'ma_buu_dien', { max: 8, placeholder: '123-4567' }),
+    companyInput(f, 'tinh_thanh', { options: pref }),
+    companyInput(f, 'dia_chi', { max: 300, wide: true }),
+    companyInput(f, 'dien_thoai', { max: 20, type: 'tel', placeholder: '03-1234-5678' }),
+    companyChecks(f, 'linh_vuc', lookupOptions(idList(f.data.linh_vuc)), 'company.noLookup'),
+    companyChecks(f, 'sales_staff_id', staffOptions(idList(f.data.sales_staff_id)), 'company.noStaff'),
+    companyChecks(f, 'support_staff_id', staffOptions(idList(f.data.support_staff_id)), 'company.noStaff'),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 2000, wide: true }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', company.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = company.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = company.saving;
+  cancel.addEventListener('click', () => { company.form = null; company.fieldErr = null; company.error = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(h, form);
+  if (f.justOpened && !company.fieldErr) { f.justOpened = false; setTimeout(() => { const first = form.querySelector('input'); if (first) first.focus(); }, 0); }
+  return wrap;
+}
+
+// ---- Danh sách ----
+function visibleCompanies() {
+  const q = norm(company.q.trim());
+  return company.rows
+    .filter((r) => company.showHidden || !r.da_an)
+    .filter((r) => !q || [r.ma, r.ten_phap_nhan, r.ten_viet_tat, r.ten_phien_am, r.ten_co_so].some((x) => norm(x).indexOf(q) >= 0))
+    .filter((r) => !company.fStaff || idList(r.sales_staff_id).concat(idList(r.support_staff_id)).indexOf(company.fStaff) >= 0)
+    .filter((r) => !company.fStatus || r.trang_thai === company.fStatus)
+    .sort((a, b) => (a.ma < b.ma ? -1 : 1));
+}
+
+function companyListEl() {
+  const box = el('div', 'stack');
+  if (company.loading && !company.rows.length) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const list = visibleCompanies();
+  const total = company.rows.filter((r) => !r.da_an).length;
+  if (!total && !company.showHidden) { box.append(el('div', 'muted', t('company.empty'))); return box; }
+  box.append(el('div', 'muted', fmt('company.count', { n: list.length, total: total })));
+  if (!list.length) { box.append(el('div', 'muted', t('company.noMatch'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['staff.col.ma', 'field.ten_phap_nhan', 'field.linh_vuc', 'field.sales_staff_id', 'field.support_staff_id', 'field.tinh_thanh', 'field.trang_thai', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+  list.forEach((r) => {
+    const tr = el('tr', r.da_an ? 'hidden-row' : null);
+    const name = cell(1, null);
+    const open = el('button', 'link-btn', r.ten_phap_nhan);
+    open.type = 'button';
+    open.addEventListener('click', () => openCompanyDetail(r.id));
+    name.append(open);
+    if (r.ten_co_so) name.append(el('div', 'muted', r.ten_co_so));
+    if (r.ten_viet_tat) name.append(el('div', 'muted', r.ten_viet_tat));
+    if (r.da_an) name.append(el('span', 'muted', ' (' + t('staff.hiddenTag') + ')'));
+    const acts = el('div', 'row-actions');
+    const edit = el('button', 'btn', t('staff.edit'));
+    edit.type = 'button'; edit.disabled = company.saving;
+    edit.setAttribute('aria-label', t('staff.edit') + ' ' + r.ten_phap_nhan);
+    edit.addEventListener('click', () => openCompanyForm(r));
+    const toggle = el('button', 'btn', r.da_an ? t('staff.unhide') : t('staff.hide'));
+    toggle.type = 'button'; toggle.disabled = company.saving;
+    toggle.setAttribute('aria-label', (r.da_an ? t('staff.unhide') : t('staff.hide')) + ' ' + r.ten_phap_nhan);
+    toggle.addEventListener('click', () => saveCompany('setHidden', ['COMPANY', r.id, !r.da_an, r.sua_luc], false));
+    acts.append(edit, toggle);
+    const actCell = cell(7, null); actCell.append(acts);
+    tr.append(cell(0, r.ma), name,
+      cell(2, idList(r.linh_vuc).map(lookupLabel).join(', ')),
+      cell(3, idList(r.sales_staff_id).map(staffLabel).join(', ')),
+      cell(4, idList(r.support_staff_id).map(staffLabel).join(', ')),
+      cell(5, r.tinh_thanh), cell(6, t('company.status.' + r.trang_thai)), actCell);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap);
+  return box;
+}
+
+// ---- Trang chi tiết (bước 2.2) ----
+function openCompanyDetail(id) {
+  company.detailId = id; company.form = null; company.error = null; contact.form = null; contact.error = null; job.form = null; job.error = null;
+  loadUpcoming(id);
+  render();
+  window.scrollTo(0, 0);
+}
+
+function renderCompanyDetail() {
+  const root = el('div', 'stack');
+  const back = el('button', 'btn', t('company.back'));
+  back.type = 'button';
+  back.addEventListener('click', () => { company.detailId = null; company.form = null; contact.form = null; job.form = null; render(); });
+  root.append(back);
+  const r = company.rows.find((x) => x.id === company.detailId);
+  if (!r) { root.append(el('div', 'muted', company.loading ? t('setup.loading') : t('err.NOT_FOUND'))); return root; }
+
+  const head = el('div', 'toolbar');
+  const h = el('h2', null, r.ma + ' · ' + r.ten_phap_nhan + (r.da_an ? ' (' + t('staff.hiddenTag') + ')' : ''));
+  const edit = el('button', 'btn', t('staff.edit'));
+  edit.type = 'button'; edit.disabled = company.saving || !!company.form;
+  edit.addEventListener('click', () => openCompanyForm(r));
+  head.append(h, edit);
+  root.append(head);
+  if (company.form) root.append(renderCompanyForm());
+  if (company.error) root.append(el('div', 'msg-err', company.error));
+  if (company.saving && !company.form) root.append(el('div', 'muted', t('ui.saving')));
+
+  const info = el('dl', 'info');
+  [['ten_viet_tat', r.ten_viet_tat], ['ten_phien_am', r.ten_phien_am], ['ten_co_so', r.ten_co_so], ['phap_nhan_so', r.phap_nhan_so],
+    ['nganh_nghe', r.nganh_nghe], ['trang_thai', t('company.status.' + r.trang_thai)],
+    ['ma_buu_dien', r.ma_buu_dien], ['tinh_thanh', r.tinh_thanh], ['dia_chi', r.dia_chi], ['dien_thoai', r.dien_thoai],
+    ['linh_vuc', idList(r.linh_vuc).map(lookupLabel).join(', ')],
+    ['sales_staff_id', idList(r.sales_staff_id).map(staffLabel).join(', ')],
+    ['support_staff_id', idList(r.support_staff_id).map(staffLabel).join(', ')],
+    ['ghi_chu', r.ghi_chu]].forEach((p) => { info.append(el('dt', null, t('field.' + p[0])), el('dd', null, p[1] || '—')); });
+  root.append(info, renderContacts(r));
+  if (can('hop_dong')) root.append(renderContracts(r)); // D-077: theo quyền
+  root.append(renderCompanyJobs(r), renderUpcoming());
+  return root;
+}
+
+function refreshCompanyList() { if (company.listBox) company.listBox.replaceChildren(companyListEl()); }
+
+function renderCompanyPage() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  if (company.detailId) { company.listBox = null; body.append(renderCompanyDetail()); return; }
+  const root = el('div', 'stack');
+
+  const bar = el('div', 'toolbar');
+  const filters = el('div', 'filters');
+  const search = el('input'); search.type = 'search'; search.value = company.q;
+  search.placeholder = t('company.search'); search.setAttribute('aria-label', t('company.search'));
+  search.addEventListener('input', () => { company.q = search.value; refreshCompanyList(); });
+  const staffSel = el('select'); staffSel.setAttribute('aria-label', t('company.filterStaff'));
+  [['', t('company.filterStaff') + ': ' + t('company.all')]].concat(company.staff.map((s) => [s.id, staffLabel(s.id)]))
+    .forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; staffSel.append(op); });
+  staffSel.value = company.fStaff;
+  staffSel.addEventListener('change', () => { company.fStaff = staffSel.value; refreshCompanyList(); });
+  const statusSel = el('select'); statusSel.setAttribute('aria-label', t('company.filterStatus'));
+  [['', t('company.filterStatus') + ': ' + t('company.all')]].concat(CHOICES.companyStatuses.map((s) => [s, t('company.status.' + s)]))
+    .forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; statusSel.append(op); });
+  statusSel.value = company.fStatus;
+  statusSel.addEventListener('change', () => { company.fStatus = statusSel.value; refreshCompanyList(); });
+  const showLabel = el('label', 'check');
+  const show = el('input'); show.type = 'checkbox'; show.checked = company.showHidden;
+  show.addEventListener('change', () => { company.showHidden = show.checked; refreshCompanyList(); });
+  showLabel.append(show, document.createTextNode(t('staff.showHidden')));
+  filters.append(search, staffSel, statusSel, showLabel);
+  const add = el('button', 'btn-primary', t('company.add'));
+  add.type = 'button'; add.disabled = company.saving || !!company.form;
+  add.addEventListener('click', () => openCompanyForm(null));
+  bar.append(filters, add);
+  root.append(bar);
+
+  if (company.form) root.append(renderCompanyForm());
+  if (company.error) root.append(el('div', 'msg-err', company.error));
+  if (company.saving && !company.form) root.append(el('div', 'muted', t('ui.saving')));
+  company.listBox = el('div');
+  company.listBox.append(companyListEl());
+  root.append(company.listBox, el('div', 'muted', t('company.note')));
+  body.append(root);
+}
+</script>

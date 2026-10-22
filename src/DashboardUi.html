@@ -1,0 +1,432 @@
+<script>
+// Bước 4.1: trang Tổng quan — số liệu tuyển dụng, 1 lần gọi máy chủ (D-060).
+// Dùng t(), fmt(), el(), render(), runServer(), page của Index.html; company, job, person, loadCompany(), loadPeople(), openPerson().
+let dash = { data: null, loading: false, error: null, staffId: '', month: '', tab: 'so_lieu' };
+
+function loadDashboard() {
+  dash.loading = true; dash.error = null;
+  runServer('getDashboard', [{ staffId: dash.staffId, month: dash.month }],
+    (res) => { dash.loading = false; dash.data = res; if (!dash.month) dash.month = res.month; render(); },
+    (msg) => { dash.loading = false; dash.error = msg; render(); });
+}
+
+// Sang trang Đơn tuyển với bộ lọc dựng sẵn.
+function goJobs(filters) {
+  page = 'jobs';
+  Object.assign(job, { form: null, q: '', fCompany: '', fStaff: '', fStatus: '', fLinhVuc: '', showHidden: false }, filters);
+  company.detailId = null;
+  loadCompany();
+  render();
+  window.scrollTo(0, 0);
+}
+
+function goPersonDetail(id) {
+  page = 'person';
+  person.form = null;
+  loadPeople();
+  openPerson(id);
+}
+
+function kpi(label, value, onClick) {
+  const box = el(onClick ? 'button' : 'div', 'kpi');
+  if (onClick) { box.type = 'button'; box.addEventListener('click', onClick); }
+  box.append(el('div', 'kpi-num', String(value)), el('div', 'kpi-label', label));
+  return box;
+}
+
+function panel(titleKey, ...children) {
+  const sec = el('section', 'panel stack');
+  sec.append(el('h2', null, t(titleKey)));
+  children.forEach((c) => sec.append(c));
+  return sec;
+}
+
+function personLink(id, name) {
+  const b = el('button', 'link-btn', name || '—');
+  b.type = 'button';
+  b.addEventListener('click', () => goPersonDetail(id));
+  return b;
+}
+
+function renderNumbers(d) {
+  const root = el('div', 'stack');
+  // (a) Đơn đang mở
+  const a = el('div', 'kpis');
+  a.append(kpi(t('dash.openJobs'), d.openJobs.count, () => goJobs({ fStatus: 'dang_mo', fStaff: d.staffId })),
+    kpi(t('dash.need'), d.openJobs.need),
+    kpi(t('dash.missing'), d.openJobs.missing, () => goJobs({ fStatus: 'dang_mo', fStaff: d.staffId })));
+  const top = el('ul', 'history');
+  if (!d.openJobs.top.length) top.append(el('li', 'muted', t('dash.noMissing')));
+  d.openJobs.top.forEach((j) => {
+    const li = el('li');
+    const b = el('button', 'link-btn', j.ma + ' · ' + j.vi_tri);
+    b.type = 'button'; b.addEventListener('click', () => goJobs({ q: j.ma }));
+    li.append(b, el('span', 'muted', j.company), el('strong', null, fmt('dash.missingN', { n: j.missing })),
+      el('span', 'muted', fmt('emp.progress', { working: j.working, waiting: j.waiting, missing: j.missing }) + ' / ' + fmt('dash.needN', { n: j.need })));
+    top.append(li);
+  });
+  // (b) Lần giới thiệu đang chạy
+  const pipe = el('div', 'kpis small');
+  Object.keys(d.pipeline).forEach((s) => pipe.append(kpi(t('app.status.' + s), d.pipeline[s])));
+  // (c) Phỏng vấn 7 ngày tới
+  const ivs = el('ul', 'history');
+  if (!d.interviews.length) ivs.append(el('li', 'muted', t('iv.noUpcoming')));
+  d.interviews.forEach((r) => {
+    const li = el('li');
+    li.append(el('strong', 'nowrap', r.thoi_gian + (r.gio_ket_thuc ? '–' + r.gio_ket_thuc : '')), el('span', null, t('iv.round.' + r.vong)),
+      personLink(r.person_id, r.person), el('span', 'muted', r.job + ' · ' + r.company));
+    ivs.append(li);
+  });
+  // (d) Chờ vào làm
+  const wait = el('ul', 'history');
+  if (!d.waiting.length) wait.append(el('li', 'muted', t('dash.noWaiting')));
+  d.waiting.forEach((w) => {
+    const li = el('li');
+    li.append(el('strong', 'nowrap', w.ngay_vao_lam || t('dash.noDate')), personLink(w.person_id, w.person), el('span', 'muted', w.job + ' · ' + w.company));
+    wait.append(li);
+  });
+  // (e) Trong tháng
+  const m = el('div', 'kpis');
+  m.append(kpi(t('dash.started'), d.monthStats.started), kpi(t('dash.left'), d.monthStats.left), kpi(t('dash.sent'), d.monthStats.sent));
+  // (f) Vòng đời
+  const life = el('div', 'kpis');
+  ['dang_lam', 'cho_vao_lam', 'dang_ung_tuyen', 'da_nghi'].forEach((k) => life.append(kpi(t('app.life.' + k), d.lifecycle[k])));
+  life.append(kpi(t('dash.lifeOther'), d.lifecycle.khac));
+
+  const grid = el('div', 'panels');
+  grid.append(panel('dash.panelJobs', a, top), panel('dash.panelPipeline', pipe), panel('dash.panelInterviews', ivs),
+    panel('dash.panelWaiting', wait), panel('dash.panelMonth', el('div', 'muted', fmt('dash.monthOf', { m: d.month })), m),
+    panel('dash.panelLife', life));
+  root.append(grid);
+  return root;
+}
+
+function renderHome() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  const root = el('div', 'stack');
+  // Thẻ (tab): Số liệu (4.1); Pipeline (4.2) và Việc cần làm (4.3) thêm sau, không đổi menu (D-034).
+  const tabs = el('div', 'tabs');
+  tabs.setAttribute('role', 'tablist');
+  DASH_TABS.forEach((k) => {
+    const b = el('button', 'tab', t('dash.tab.' + k));
+    b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(dash.tab === k));
+    b.addEventListener('click', () => {
+      dash.tab = k;
+      if (k === 'pipeline' && !pl.data && !pl.loading) loadPipeline();
+      if (k === 'viec' && !tk.data && !tk.loading) loadTasks();
+      if (k === 'chuyen_doi' && !cv.data && !cv.loading) loadConversion();
+      render();
+    });
+    tabs.append(b);
+  });
+  root.append(tabs);
+
+  if (dash.tab !== 'so_lieu') { // các thẻ khác có bộ lọc riêng
+    root.append(renderDashTab(dash.data));
+    body.append(root);
+    return;
+  }
+  const bar = el('div', 'filters');
+  const staffSel = el('select');
+  staffSel.setAttribute('aria-label', t('company.filterStaff'));
+  [['', t('company.filterStaff') + ': ' + t('company.all')]].concat(((dash.data && dash.data.staff) || [])
+    .map((s) => [s.id, s.ho_ten + (s.inactive ? ' (' + t('company.inactiveTag') + ')' : '')]))
+    .forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; staffSel.append(op); });
+  staffSel.value = dash.staffId;
+  staffSel.addEventListener('change', () => { dash.staffId = staffSel.value; loadDashboard(); render(); });
+  const month = el('input'); month.type = 'month'; month.value = dash.month;
+  month.setAttribute('aria-label', t('dash.month'));
+  month.addEventListener('change', () => { if (month.value) { dash.month = month.value; loadDashboard(); render(); } });
+  const refresh = el('button', 'btn', t('dash.refresh'));
+  refresh.type = 'button'; refresh.disabled = dash.loading;
+  refresh.addEventListener('click', () => { loadDashboard(); render(); });
+  bar.append(staffSel, month, refresh);
+  root.append(bar);
+
+  if (dash.error) root.append(el('div', 'msg-err', dash.error));
+  if (dash.loading && !dash.data) root.append(el('div', 'muted', t('setup.loading')));
+  else if (dash.data) {
+    if (dash.loading) root.append(el('div', 'muted', t('setup.loading')));
+    root.append(renderDashTab(dash.data));
+    root.append(el('div', 'muted', fmt('dash.note', { d: dash.data.today })));
+  }
+  body.append(root);
+}
+
+const DASH_TABS = ['so_lieu', 'pipeline', 'viec', 'chuyen_doi'];
+
+// ---- 9b (D-073): Tỷ lệ chuyển đổi theo lô lần giới thiệu ----
+let cv = { data: null, loading: false, error: null, from: '', to: '', staffId: '' };
+
+function loadConversion() {
+  cv.loading = true; cv.error = null;
+  runServer('getConversion', [{ from: cv.from, to: cv.to, staffId: cv.staffId }],
+    (res) => { cv.loading = false; cv.data = res; cv.from = res.from; cv.to = res.to; render(); },
+    (msg) => { cv.loading = false; cv.error = msg; render(); });
+}
+
+const pctTxt = (a, b) => (b ? Math.round(a * 100 / b) + '%' : '—');
+
+function renderConversion() {
+  const root = el('div', 'stack');
+  const d = cv.data;
+  const bar = el('div', 'filters');
+  const mk = (key, label) => {
+    const i = el('input'); i.type = 'month'; i.value = cv[key]; i.setAttribute('aria-label', t(label));
+    i.addEventListener('change', () => { if (i.value) { cv[key] = i.value; loadConversion(); render(); } });
+    const lab = el('label', 'inline-field'); lab.append(document.createTextNode(t(label)), i); return lab;
+  };
+  const sel = el('select');
+  sel.setAttribute('aria-label', t('field.recruiter_staff_id'));
+  [['', t('field.recruiter_staff_id') + ': ' + t('company.all')]].concat(((d && d.staff) || []).map((s) => [s.id, s.ho_ten + (s.inactive ? ' (' + t('company.inactiveTag') + ')' : '')]))
+    .forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; sel.append(op); });
+  sel.value = cv.staffId;
+  sel.addEventListener('change', () => { cv.staffId = sel.value; loadConversion(); render(); });
+  bar.append(mk('from', 'cv.from'), mk('to', 'cv.to'), sel);
+  root.append(bar);
+  if (cv.error) root.append(el('div', 'msg-err', cv.error));
+  if (!d) { root.append(el('div', 'muted', t('setup.loading'))); return root; }
+  if (cv.loading) root.append(el('div', 'muted', t('setup.loading')));
+  const n = d.total;
+  const chart = el('div', 'bars');
+  chart.setAttribute('role', 'img');
+  chart.setAttribute('aria-label', t('dash.tab.chuyen_doi'));
+  d.stages.forEach((s, i) => {
+    const row = el('div', 'bar-row funnel');
+    const track = el('div', 'bar-track');
+    const fill = el('div', 'bar-fill'); fill.style.width = (n[0] ? Math.round(n[i] * 100 / n[0]) : 0) + '%';
+    track.append(fill);
+    row.append(el('span', null, t('cv.stage.' + s)), track, el('span', 'nowrap', n[i] + (i ? ' · ' + fmt('cv.ofPrev', { p: pctTxt(n[i], n[i - 1]) }) : '')));
+    chart.append(row);
+  });
+  root.append(chart, el('div', 'muted', fmt('cv.summary', { n: n[0], p: pctTxt(n[4], n[0]) })));
+  if (d.byStaff.length) {
+    const wrap = el('div', 'table-wrap');
+    const table = el('table', 'cards many');
+    const cols = ['field.recruiter_staff_id'].concat(d.stages.map((s) => 'cv.stage.' + s)).concat(['cv.rate']);
+    const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+    const thead = el('thead'); thead.append(head);
+    const tbody = el('tbody');
+    d.byStaff.forEach((r) => {
+      const tr = el('tr');
+      const cell = (i, text) => { const td = el('td', null, String(text)); td.dataset.label = t(cols[i]); return td; };
+      tr.append(cell(0, r.ho_ten || t('cv.noStaff')));
+      r.counts.forEach((c, i) => tr.append(cell(i + 1, c)));
+      tr.append(cell(6, pctTxt(r.counts[4], r.counts[0])));
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    root.append(wrap);
+  }
+  root.append(el('div', 'muted', t('cv.note')));
+  return root;
+}
+
+// ---- Bước 4.2: Pipeline (D-061) ----
+let pl = { data: null, loading: false, error: null, staffId: '', companyId: '', jobId: '' };
+
+function loadPipeline() {
+  pl.loading = true; pl.error = null;
+  runServer('getPipeline', [{ staffId: pl.staffId, companyId: pl.companyId, jobId: pl.jobId }],
+    (res) => { pl.loading = false; pl.data = res; render(); },
+    (msg) => { pl.loading = false; pl.error = msg; render(); });
+}
+
+function plSelect(key, label, options) {
+  const sel = el('select');
+  sel.setAttribute('aria-label', t(label));
+  [['', t(label) + ': ' + t('company.all')]].concat(options).forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; sel.append(op); });
+  sel.value = pl[key];
+  sel.addEventListener('change', () => {
+    pl[key] = sel.value;
+    if (key === 'companyId') pl.jobId = ''; // đổi công ty thì bỏ chọn đơn
+    loadPipeline(); render();
+  });
+  return sel;
+}
+
+function renderPipeline() {
+  const root = el('div', 'stack');
+  const d = pl.data;
+  const bar = el('div', 'filters');
+  bar.append(
+    plSelect('staffId', 'field.recruiter_staff_id', ((d && d.staff) || []).map((s) => [s.id, s.ho_ten + (s.inactive ? ' (' + t('company.inactiveTag') + ')' : '')])),
+    plSelect('companyId', 'field.company_id', ((d && d.companies) || []).map((c) => [c.id, c.label])),
+    plSelect('jobId', 'field.job_id', ((d && d.jobs) || []).map((j) => [j.id, j.label])));
+  const refresh = el('button', 'btn', t('dash.refresh'));
+  refresh.type = 'button'; refresh.disabled = pl.loading;
+  refresh.addEventListener('click', () => { loadPipeline(); render(); });
+  bar.append(refresh);
+  root.append(bar);
+  if (pl.error) root.append(el('div', 'msg-err', pl.error));
+  if (!d) { root.append(el('div', 'muted', t('setup.loading'))); return root; }
+  if (pl.loading) root.append(el('div', 'muted', t('setup.loading')));
+  const board = el('div', 'board');
+  d.statuses.forEach((s) => {
+    const col = el('section', 'col');
+    col.setAttribute('aria-label', t('app.status.' + s));
+    col.append(el('h3', null, t('app.status.' + s) + ' (' + d.columns[s].length + ')'));
+    if (!d.columns[s].length) col.append(el('div', 'muted', '—'));
+    d.columns[s].forEach((c) => {
+      const card = el('button', 'pl-card');
+      card.type = 'button';
+      card.setAttribute('aria-label', c.ma + ' ' + c.person);
+      card.addEventListener('click', () => goPersonDetail(c.person_id));
+      card.append(el('strong', null, c.person), el('div', null, c.job), el('div', 'muted', c.company),
+        el('div', c.days >= 14 ? 'msg-warn' : 'muted', fmt('pl.days', { n: c.days, d: c.since })));
+      if (c.next_interview) card.append(el('div', null, fmt('pl.next', { t: c.next_interview })));
+      if (c.recruiter) card.append(el('div', 'muted', c.recruiter));
+      col.append(card);
+    });
+    board.append(col);
+  });
+  root.append(board, el('div', 'muted', t('pl.note')));
+  return root;
+}
+
+// ---- Bước 4.3: Việc cần làm (D-062) ----
+let tk = { data: null, loading: false, error: null, staffId: '' };
+let tset = { data: null, saving: false, error: null, edits: {} };
+
+function loadTasks() {
+  tk.loading = true; tk.error = null;
+  runServer('getTasks', [{ staffId: tk.staffId }],
+    (res) => { tk.loading = false; tk.data = res; render(); },
+    (msg) => { tk.loading = false; tk.error = msg; render(); });
+  if (!company.lookup.length) runServer('listRecords', ['LOOKUP'], (rows) => { company.lookup = rows; render(); }, () => {}); // tên giấy tờ (GĐ 11)
+}
+
+function renderTasks() {
+  const root = el('div', 'stack');
+  const d = tk.data;
+  const bar = el('div', 'filters');
+  const sel = el('select');
+  sel.setAttribute('aria-label', t('company.filterStaff'));
+  [['', t('company.filterStaff') + ': ' + t('company.all')]].concat(((d && d.staff) || []).map((s) => [s.id, s.ho_ten + (s.inactive ? ' (' + t('company.inactiveTag') + ')' : '')]))
+    .forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; sel.append(op); });
+  sel.value = tk.staffId;
+  sel.addEventListener('change', () => { tk.staffId = sel.value; loadTasks(); render(); });
+  const refresh = el('button', 'btn', t('dash.refresh'));
+  refresh.type = 'button'; refresh.disabled = tk.loading;
+  refresh.addEventListener('click', () => { loadTasks(); render(); });
+  bar.append(sel, refresh);
+  root.append(bar);
+  if (tk.error) root.append(el('div', 'msg-err', tk.error));
+  if (!d) { root.append(el('div', 'muted', t('setup.loading'))); return root; }
+  if (tk.loading) root.append(el('div', 'muted', t('setup.loading')));
+  root.append(el('div', 'muted', fmt('tk.count', { n: d.tasks.length, over: d.tasks.filter((x) => x.overdue).length })));
+  if (!d.tasks.length) root.append(el('div', 'msg-ok', t('tk.none')));
+  const ul = el('ul', 'history tasks');
+  d.tasks.forEach((x) => {
+    const li = el('li', x.overdue ? 'overdue' : null);
+    li.append(el('strong', 'nowrap ' + (x.overdue ? 'msg-err' : ''), x.date), el('span', 'badge', t('tk.rule.' + x.rule)));
+    const vars = { person: x.person || '', job: x.job || '', company: x.company || '', time: x.time || '', days: x.days, missing: x.missing, need: x.need,
+      status: x.status ? t('app.status.' + x.status) : '', date: x.date, loai: x.loai ? t('visa.type.' + x.loai) : '', last: x.last || '—', invoice: x.invoice_ma || '', remain: x.remain !== undefined ? yen(x.remain) : '', count: x.count,
+      year: x.year, from: x.from || '', to: x.to || '', name: x.name || '', giay_to: x.giay_to ? lookupLabel(x.giay_to) : '',
+      doc_state: x.doc_state ? t('visa.doc.' + x.doc_state) : '', owner: x.owner_ma || '', incident: x.incident_ma || '', ky: x.ky ? quarterLabel(x.ky) : '',
+      uu_tien: x.uu_tien ? t('inc.prio.' + x.uu_tien) : '' };
+    const expired = x.rule.slice(-7) === '_expiry' && x.days < 0;
+    if (expired) vars.days = -x.days;
+    li.append(el('span', null, fmt('tk.text.' + x.rule + (expired ? '_over' : ''), vars)));
+    if (x.owner_id) { // GĐ 11: mở đúng hồ sơ visa / 受入れ前 / vấn đề
+      const go = { case: ['tk.openCase', goVisaCase], pre: ['tk.openPre', goPreEntry], incident: ['tk.openIncident', goIncident] }[x.owner_kind] || ['tk.openPre', goPreEntry];
+      const b = el('button', 'btn small', t(go[0]));
+      b.type = 'button'; b.addEventListener('click', () => go[1](x.owner_id));
+      li.append(b);
+    } else if (x.rule === 'support_due') { // GĐ 11.3: mở trang 定期面談 đúng quý
+      const b = el('button', 'btn small', t('tk.openMendan'));
+      b.type = 'button'; b.addEventListener('click', () => goMendan(x.ky));
+      li.append(b);
+    } else if (x.person_id) {
+      const b = el('button', 'btn small', t('tk.openPerson'));
+      b.type = 'button'; b.addEventListener('click', () => goPersonDetail(x.person_id));
+      li.append(b);
+    } else if (x.rule === 'todokede') {
+      const b = el('button', 'btn small', t('tk.todokedeDone'));
+      b.type = 'button'; b.disabled = tk.loading;
+      b.setAttribute('aria-label', t('tk.todokedeDone') + ' ' + x.company);
+      b.addEventListener('click', () => { tk.loading = true; render(); runServer('markTodokede', [x.company_id, x.year], () => loadTasks(), (msg) => { tk.loading = false; tk.error = msg; render(); }); });
+      li.append(b);
+    } else if (x.invoice_ma) {
+      const b = el('button', 'btn small', t('tk.openInvoice'));
+      b.type = 'button'; b.addEventListener('click', () => goInvoice(x.invoice_ma));
+      li.append(b);
+    } else if (x.rule === 'revenue_todo') {
+      const b = el('button', 'btn small', t('tk.openSales'));
+      b.type = 'button'; b.addEventListener('click', () => { page = 'sales'; sales.tab = 'can_lap'; loadSalesPage(); render(); window.scrollTo(0, 0); });
+      li.append(b);
+    } else if (x.job_id) {
+      const b = el('button', 'btn small', t('tk.openJob'));
+      b.type = 'button'; b.addEventListener('click', () => goJobs({ q: x.job_ma }));
+      li.append(b);
+    }
+    ul.append(li);
+  });
+  root.append(ul, el('div', 'muted', t('tk.note')));
+  return root;
+}
+
+// Cài đặt → Việc cần làm: bật/tắt + số ngày cho từng quy tắc (lưu trong file dữ liệu, có nhật ký).
+// savedRule: chỉ bỏ phần đang sửa của quy tắc vừa lưu; các dòng khác đang sửa dở được giữ nguyên.
+function loadTaskSettings(savedRule) {
+  runServer('getTaskSettings', [], (res) => { tset.data = res; if (savedRule) delete tset.edits[savedRule]; render(); }, (msg) => { tset.error = msg; render(); });
+}
+
+function renderTaskSettings() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'tset-h');
+  const h = el('h2', null, t('tk.settingsTitle')); h.id = 'tset-h';
+  box.append(h, el('div', 'muted', t('tk.settingsDesc')));
+  if (tset.error) box.append(el('div', 'msg-err', tset.error));
+  if (!tset.data) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['tk.col.rule', 'tk.col.on', 'tk.col.days', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i) => { const td = el('td'); td.dataset.label = t(cols[i]); return td; };
+  Object.keys(tset.data).forEach((k) => {
+    const r = tset.data[k];
+    const e = tset.edits[k] || (tset.edits[k] = { on: r.on, days: String(r.days) });
+    const tr = el('tr');
+    const name = cell(0); name.append(el('strong', null, t('tk.rule.' + k)), el('div', 'muted', t('tk.desc.' + k)));
+    const onCell = cell(1);
+    const cb = el('input'); cb.type = 'checkbox'; cb.checked = e.on; cb.setAttribute('aria-label', t('tk.col.on') + ' ' + t('tk.rule.' + k));
+    cb.addEventListener('change', () => { e.on = cb.checked; });
+    onCell.append(cb);
+    const dCell = cell(2);
+    const n = el('input'); n.type = 'number'; n.min = '0'; n.max = '365'; n.step = '1'; n.value = e.days; n.className = 'num-input';
+    n.setAttribute('aria-label', t('tk.col.days') + ' ' + t('tk.rule.' + k));
+    n.addEventListener('input', () => { e.days = n.value; });
+    dCell.append(n, el('div', 'muted', fmt('tk.default', { n: r.defaults.days })));
+    const aCell = cell(3);
+    const save = el('button', 'btn', tset.saving === k ? t('ui.saving') : t('staff.save'));
+    save.type = 'button'; save.disabled = !!tset.saving;
+    save.setAttribute('aria-label', t('staff.save') + ' ' + t('tk.rule.' + k));
+    save.addEventListener('click', () => {
+      tset.saving = k; tset.error = null; render();
+      runServer('saveTaskSetting', [k, e.on, e.days, r.sua_luc],
+        () => { tset.saving = false; loadTaskSettings(k); },
+        (msg) => { tset.saving = false; tset.error = msg; if (msg === t('err.CONFLICT')) loadTaskSettings(k); render(); });
+    });
+    aCell.append(save);
+    tr.append(name, onCell, dCell, aCell);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap);
+  return box;
+}
+
+function renderDashTab(d) {
+  if (dash.tab === 'pipeline') return renderPipeline();
+  if (dash.tab === 'viec') return renderTasks();
+  if (dash.tab === 'chuyen_doi') return renderConversion();
+  return renderNumbers(d);
+}
+</script>

@@ -1,0 +1,153 @@
+<script>
+// Bước 3.4: "Quá trình làm việc" trong hồ sơ người + ghi nghỉ việc (D-057).
+// Bản ghi vào làm được tạo khi chọn "Đã vào làm" ở lần giới thiệu (ApplicationUi.html → startEmployment).
+// Dùng t(), fmt(), el(), render(), runServer() của Index.html; company, companyInput(), validationField(), lookupLabel() của Company.html;
+// lookupChoices(), asOptions() của PersonUi.html; workingOn(), jobLabel() của ApplicationUi.html.
+let emp = { form: null, fieldErr: null, saving: false, error: null, fix: null };
+
+function reloadEmps() {
+  runServer('listRecords', ['EMPLOYMENT'], (rows) => { company.emps = rows; render(); }, (msg) => { emp.error = msg; render(); });
+}
+
+function openLeaveForm(e) {
+  emp.form = { id: e.id, ma: e.ma, sua_luc: e.sua_luc, data: { ngay_nghi: e.ngay_nghi || todayJst(), ly_do_nghi: e.ly_do_nghi || '', ghi_chu: e.ghi_chu || '' } };
+  emp.fieldErr = null; emp.error = null;
+  render();
+}
+
+function submitLeave() {
+  const f = emp.form;
+  const req = !f.data.ngay_nghi ? 'ngay_nghi' : !f.data.ly_do_nghi ? 'ly_do_nghi' : null;
+  if (req) { emp.fieldErr = { field: req, msg: fmt('val.required', { field: t('field.' + req) }) }; render(); return; }
+  emp.saving = true; emp.error = null; emp.fieldErr = null; render();
+  runServer('endEmployment', [f.id, f.data, f.sua_luc],
+    () => { emp.saving = false; emp.form = null; reloadEmps(); },
+    (msg, raw) => {
+      emp.saving = false;
+      const field = validationField(raw);
+      if (field) emp.fieldErr = { field: field, msg: msg }; else emp.error = msg;
+      if (msg === t('err.CONFLICT')) { emp.form = null; reloadEmps(); }
+      render();
+    });
+}
+
+function renderLeaveForm() {
+  const f = emp.form;
+  const fe = emp.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.append(el('h3', null, fmt('emp.leaveTitle', { ma: f.ma })));
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitLeave(); });
+  form.append(
+    companyInput(f, 'ngay_nghi', { required: true, type: 'date', fe: fe }),
+    companyInput(f, 'ly_do_nghi', Object.assign({ required: true, fe: fe }, { options: asOptions(lookupChoices('ly_do_nghi', f.data.ly_do_nghi)) })),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 2000, wide: true, fe: fe }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', emp.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = emp.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = emp.saving;
+  cancel.addEventListener('click', () => { emp.form = null; emp.fieldErr = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(form);
+  return wrap;
+}
+
+// D-079: lần vào làm nhập từ file cũ — bổ sung ngày vào làm còn trống, bật / tắt hỗ trợ (支援なし), ghi chú.
+function openFixForm(e) {
+  emp.fix = { id: e.id, ma: e.ma, sua_luc: e.sua_luc, noStart: !e.ngay_vao_lam, data: { ngay_vao_lam: '', ho_tro: e.ho_tro || '', ghi_chu: e.ghi_chu || '' } };
+  emp.fieldErr = null; emp.error = null; emp.form = null;
+  render();
+}
+
+function submitFix() {
+  const f = emp.fix;
+  emp.saving = true; emp.error = null; emp.fieldErr = null; render();
+  runServer('updateEmployment', [f.id, f.data, f.sua_luc],
+    () => { emp.saving = false; emp.fix = null; reloadEmps(); },
+    (msg, raw) => {
+      emp.saving = false;
+      const field = validationField(raw);
+      if (field) emp.fieldErr = { field: field, msg: msg }; else emp.error = msg;
+      if (msg === t('err.CONFLICT')) { emp.fix = null; reloadEmps(); }
+      render();
+    });
+}
+
+function renderFixForm() {
+  const f = emp.fix;
+  const wrap = el('section', 'stack');
+  wrap.append(el('h3', null, t('emp.fixTitle') + ' — ' + f.ma));
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitFix(); });
+  if (f.noStart) form.append(companyInput(f, 'ngay_vao_lam', { type: 'date', fe: emp.fieldErr }));
+  form.append(companyInput(f, 'ho_tro', { fe: emp.fieldErr, options: [['', t('emp.hoTroY')], ['N', t('emp.hoTroN')]] }),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 2000, wide: true, fe: emp.fieldErr }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', emp.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = emp.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = emp.saving;
+  cancel.addEventListener('click', () => { emp.fix = null; emp.fieldErr = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(form);
+  return wrap;
+}
+
+function renderEmployments(p) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'emp-h');
+  const h = el('h2', null, t('emp.title')); h.id = 'emp-h';
+  box.append(h, el('div', 'muted', t('emp.hint')));
+  if (emp.form) box.append(renderLeaveForm());
+  if (emp.fix) box.append(renderFixForm());
+  if (emp.error) box.append(el('div', 'msg-err', emp.error));
+  const today = todayJst();
+  const list = (company.emps || []).filter((e) => e.person_id === p.id && !e.da_an).sort((a, b) => ((a.ngay_vao_lam || '9999') < (b.ngay_vao_lam || '9999') ? 1 : -1));
+  if (!list.length) { box.append(el('div', 'muted', t('emp.empty'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['staff.col.ma', 'field.company_id', 'field.job_id', 'field.ngay_vao_lam', 'field.ngay_nghi', 'field.ly_do_nghi', 'app.col.status', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+  list.forEach((e) => {
+    const co = company.rows.find((c) => c.id === e.company_id);
+    const state = empState(e, today);
+    const reason = cell(5, e.ly_do_nghi ? lookupLabel(e.ly_do_nghi) : '');
+    if (e.ghi_chu) reason.append(el('div', 'muted', e.ghi_chu));
+    const acts = el('div', 'row-actions');
+    const b = el('button', 'btn', e.ngay_nghi ? t('emp.editLeave') : t('emp.leave'));
+    b.type = 'button'; b.disabled = emp.saving || !!emp.form;
+    b.setAttribute('aria-label', b.textContent + ' ' + e.ma);
+    b.addEventListener('click', () => openLeaveForm(e));
+    acts.append(b);
+    if (e.tinh_trang) { // nhập từ file cũ: bổ sung ngày / hỗ trợ
+      const fx = el('button', 'btn', t('emp.fixTitle'));
+      fx.type = 'button'; fx.disabled = emp.saving || !!emp.form || !!emp.fix;
+      fx.setAttribute('aria-label', t('emp.fixTitle') + ' ' + e.ma);
+      fx.addEventListener('click', () => openFixForm(e));
+      acts.append(fx);
+    }
+    const actCell = cell(7, null); actCell.append(acts);
+    const tr = el('tr');
+    const dayIn = cell(3, e.ngay_vao_lam || (e.tinh_trang ? t('emp.noStart') : '')); dayIn.classList.add('nowrap');
+    const dayOut = cell(4, e.ngay_nghi || (state === 'da_nghi' && !e.ngay_nghi ? t('emp.leftUnknown') : '')); dayOut.classList.add('nowrap');
+    const st = cell(6, t('app.life.' + state));
+    if (e.ho_tro === 'N') st.append(el('div', 'muted', t('emp.hoTroN')));
+    if (e.tinh_trang) st.append(el('div', 'muted', t('emp.imported')));
+    tr.append(cell(0, e.ma), cell(1, co ? co.ten_phap_nhan + (co.ten_co_so ? ' / ' + co.ten_co_so : '') : ''), cell(2, e.job_id ? jobLabel(e.job_id) : ''), dayIn, dayOut, reason, st, actCell);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap);
+  return box;
+}
+</script>

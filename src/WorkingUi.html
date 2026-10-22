@@ -1,0 +1,98 @@
+<script>
+// Bước 7.1 (D-066): trang "Đang làm việc" — người đang làm / chờ vào làm, 1 lần gọi máy chủ (getWorking).
+// Dùng t(), fmt(), el(), render(), runServer() của Index.html; lookupLabel(), company của Company.html; plain() của PersonUi.html;
+// goPersonDetail() của DashboardUi.html.
+let wk = { data: null, loading: false, error: null, companyId: '', staffId: '', q: '', listBox: null };
+
+function loadWorking() {
+  wk.loading = true; wk.error = null;
+  runServer('getWorking', [{ companyId: wk.companyId, staffId: wk.staffId }],
+    (res) => { wk.loading = false; wk.data = res; render(); },
+    (msg) => { wk.loading = false; wk.error = msg; render(); });
+  // Tên tư cách lưu trú theo ngôn ngữ đang chọn.
+  runServer('listRecords', ['LOOKUP'], (rows) => { company.lookup = rows; render(); }, (msg) => { wk.error = msg; render(); });
+}
+
+function wkSelect(key, label, options) {
+  const sel = el('select');
+  sel.setAttribute('aria-label', t(label));
+  [['', t(label) + ': ' + t('company.all')]].concat(options).forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; sel.append(op); });
+  sel.value = wk[key];
+  sel.addEventListener('change', () => { wk[key] = sel.value; loadWorking(); render(); });
+  return sel;
+}
+
+function workingListEl() {
+  const box = el('div', 'stack');
+  const d = wk.data;
+  const q = plain(wk.q.trim());
+  const rows = d.rows.filter((r) => !q || [r.person, r.person_ma, r.company, r.job].some((x) => plain(x).indexOf(q) >= 0));
+  box.append(el('div', 'muted', fmt('wk.count', { working: rows.filter((r) => r.state === 'dang_lam').length, waiting: rows.filter((r) => r.state === 'cho_vao_lam').length,
+    warn: rows.filter((r) => r.visa_warn).length, sup: rows.filter((r) => r.support_warn).length })));
+  if (!rows.length) box.append(el('div', 'muted', t('wk.empty')));
+  else {
+    const wrap = el('div', 'table-wrap');
+    const table = el('table', 'cards many'); // 9 cột: dạng bảng tràn ngang ở ~1280px → dùng thẻ
+    const cols = ['field.person_id', 'field.company_id', 'field.job_id', 'app.col.status', 'field.ngay_vao_lam', 'wk.col.months', 'field.tu_cach_luu_tru', 'field.han_luu_tru', 'wk.col.support', 'field.cs_staff_id'];
+    const head = el('tr');
+    cols.forEach((k) => head.append(el('th', null, t(k))));
+    const thead = el('thead'); thead.append(head);
+    const tbody = el('tbody');
+    rows.forEach((r) => {
+      const cells = [];
+      const add = (node) => { node.dataset.label = t(cols[cells.length]); cells.push(node); };
+      const pc = el('td');
+      const b = el('button', 'link-btn', r.person_ma + ' · ' + r.person);
+      b.type = 'button'; b.addEventListener('click', () => goPersonDetail(r.person_id));
+      pc.append(b); add(pc);
+      add(el('td', null, r.company));
+      add(el('td', null, r.job));
+      add(el('td', null, t('app.life.' + r.state)));
+      add(el('td', 'nowrap', r.ngay_vao_lam || t('emp.noStart')));
+      add(el('td', null, r.state === 'dang_lam' && r.months !== null ? fmt('wk.months', { n: r.months }) : '—'));
+      add(el('td', null, r.tu_cach ? lookupLabel(r.tu_cach) : ''));
+      const han = el('td', 'nowrap' + (r.visa_warn ? ' msg-err' : ''), r.han_luu_tru || '—');
+      if (r.days_left !== null) han.append(el('div', r.visa_warn ? null : 'muted', r.days_left < 0 ? fmt('wk.expired', { n: -r.days_left }) : fmt('wk.left', { n: r.days_left })));
+      add(han);
+      const sp = el('td', 'nowrap' + (r.support_warn ? ' msg-err' : ''), r.ho_tro === 'N' ? t('emp.hoTroN') : r.next_support ? fmt('wk.nextSupport', { d: r.next_support }) : '—');
+      if (r.next_support) sp.append(el('div', r.support_warn ? null : 'muted', r.last_support ? fmt('wk.lastSupport', { d: r.last_support }) : t('wk.noSupport')));
+      add(sp);
+      add(el('td', null, r.support));
+      const tr = el('tr');
+      cells.forEach((c) => tr.append(c));
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    box.append(wrap);
+  }
+  return box;
+}
+
+function renderWorkingPage() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  const root = el('div', 'stack');
+  const d = wk.data;
+  const bar = el('div', 'filters');
+  const search = el('input'); search.type = 'search'; search.value = wk.q;
+  search.placeholder = t('wk.search'); search.setAttribute('aria-label', t('wk.search'));
+  search.addEventListener('input', () => { wk.q = search.value; if (wk.listBox) wk.listBox.replaceChildren(workingListEl()); });
+  const refresh = el('button', 'btn', t('dash.refresh'));
+  refresh.type = 'button'; refresh.disabled = wk.loading;
+  refresh.addEventListener('click', () => { loadWorking(); render(); });
+  bar.append(search,
+    wkSelect('companyId', 'field.company_id', ((d && d.companies) || []).map((c) => [c.id, c.label])),
+    wkSelect('staffId', 'field.support_staff_id', ((d && d.staff) || []).map((s) => [s.id, s.ho_ten + (s.inactive ? ' (' + t('company.inactiveTag') + ')' : '')])),
+    refresh);
+  root.append(bar);
+  if (wk.error) root.append(el('div', 'msg-err', wk.error));
+  if (!d) { root.append(el('div', 'muted', t('setup.loading'))); body.append(root); return; }
+  if (wk.loading) root.append(el('div', 'muted', t('setup.loading')));
+  wk.listBox = el('div');
+  wk.listBox.append(workingListEl());
+  root.append(wk.listBox);
+  root.append(el('div', 'muted', fmt('wk.note', { n: d.warnDays })));
+  body.append(root);
+}
+</script>

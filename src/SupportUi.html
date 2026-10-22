@@ -1,0 +1,134 @@
+<script>
+// Bước 7.2 (D-068): mục "Nhật ký hỗ trợ" trong hồ sơ người (定期面談, tư vấn, sự cố, hỗ trợ sinh hoạt…).
+// Dùng t(), fmt(), el(), render(), runServer(), CHOICES của Index.html; company, companyInput(), validationField(), staffOptions(), staffLabel(),
+// idList(), todayJst() của Company.html; workingOn(), jobLabel() của ApplicationUi.html; byMa của Jobs.html.
+const SUPPORT_FIELDS = ['loai_ho_tro', 'ngay', 'hinh_thuc', 'employment_id', 'staff_id', 'noi_dung', 'ghi_chu'];
+let sup = { rows: null, form: null, fieldErr: null, saving: false, error: null };
+
+// Tải khi mở hồ sơ người (không nạp sẵn ở danh sách người).
+function loadSupport() {
+  runServer('listRecords', ['SUPPORT_LOG'], (rows) => { sup.rows = rows; render(); }, (msg) => { sup.error = msg; render(); });
+}
+
+function openSupportForm(row, p) {
+  const data = {};
+  SUPPORT_FIELDS.forEach((k) => { data[k] = row ? row[k] || '' : ''; });
+  if (!row) {
+    const today = todayJst();
+    const cur = (company.emps || []).find((e) => e.person_id === p.id && workingOn(e, today));
+    Object.assign(data, { loai_ho_tro: 'dinh_ky', ngay: today, employment_id: cur ? cur.id : '' });
+  }
+  sup.form = { id: row ? row.id : null, ma: row ? row.ma : '', sua_luc: row ? row.sua_luc : '', personId: p.id, data: data };
+  sup.fieldErr = null; sup.error = null;
+  render();
+}
+
+function saveSupport(fn, args, closeForm) {
+  sup.saving = true; sup.error = null; sup.fieldErr = null; render();
+  runServer(fn, args,
+    () => { sup.saving = false; if (closeForm) sup.form = null; loadSupport(); },
+    (msg, raw) => {
+      sup.saving = false;
+      const field = validationField(raw);
+      if (field && sup.form) sup.fieldErr = { field: field, msg: msg }; else sup.error = msg;
+      if (msg === t('err.CONFLICT')) { sup.form = null; loadSupport(); }
+      render();
+    });
+}
+
+function submitSupport() {
+  const f = sup.form;
+  const req = !f.data.ngay ? 'ngay' : !f.data.noi_dung.trim() ? 'noi_dung' : null;
+  if (req) { sup.fieldErr = { field: req, msg: fmt('val.required', { field: t('field.' + req) }) }; render(); return; }
+  if (f.id) saveSupport('updateRecord', ['SUPPORT_LOG', f.id, f.data, f.sua_luc], true);
+  else saveSupport('createRecord', ['SUPPORT_LOG', Object.assign({ person_id: f.personId }, f.data)], true);
+}
+
+function empLabel(e) {
+  const co = company.rows.find((c) => c.id === e.company_id);
+  return e.ma + ' · ' + (co ? co.ten_phap_nhan : '') + ' (' + e.ngay_vao_lam + (e.ngay_nghi ? ' → ' + e.ngay_nghi : '') + ')';
+}
+
+function renderSupportForm(p) {
+  const f = sup.form;
+  const fe = sup.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.setAttribute('aria-labelledby', 'sup-form-h');
+  const h = el('h3', null, f.id ? fmt('sup.editTitle', { ma: f.ma }) : t('sup.newTitle')); h.id = 'sup-form-h';
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitSupport(); });
+  const emps = (company.emps || []).filter((e) => e.person_id === p.id && (!e.da_an || e.id === f.data.employment_id))
+    .sort((a, b) => (a.ngay_vao_lam < b.ngay_vao_lam ? 1 : -1));
+  const staffOpts = staffOptions(idList(f.data.staff_id)).map((o) => [o.id, o.text + (o.tag ? ' (' + o.tag + ')' : '')]);
+  form.append(
+    companyInput(f, 'loai_ho_tro', { required: true, fe: fe, options: CHOICES.supportTypes.map((s) => [s, t('sup.type.' + s)]) }),
+    companyInput(f, 'ngay', { required: true, type: 'date', fe: fe }),
+    companyInput(f, 'hinh_thuc', { fe: fe, options: [['', '—']].concat(CHOICES.ivForms.map((s) => [s, t('iv.form.' + s)])) }),
+    companyInput(f, 'employment_id', { fe: fe, options: [['', '—']].concat(emps.map((e) => [e.id, empLabel(e)])) }),
+    companyInput(f, 'staff_id', { fe: fe, options: [['', '—']].concat(staffOpts) }),
+    companyInput(f, 'noi_dung', { required: true, textarea: true, max: 2000, wide: true, fe: fe }),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 1000, wide: true, fe: fe }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', sup.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = sup.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = sup.saving;
+  cancel.addEventListener('click', () => { sup.form = null; sup.fieldErr = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(h, form);
+  return wrap;
+}
+
+function renderSupportLogs(p) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'sup-h');
+  const bar = el('div', 'toolbar');
+  const h = el('h2', null, t('sup.title')); h.id = 'sup-h';
+  const add = el('button', 'btn-primary', t('sup.add'));
+  add.type = 'button'; add.disabled = sup.saving || !!sup.form || !sup.rows;
+  add.addEventListener('click', () => openSupportForm(null, p));
+  bar.append(h, add);
+  box.append(bar);
+  if (sup.form && sup.form.personId === p.id) box.append(renderSupportForm(p));
+  if (sup.error) box.append(el('div', 'msg-err', sup.error));
+  if (!sup.rows) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const list = sup.rows.filter((r) => r.person_id === p.id && !r.da_an).sort((a, b) => (a.ngay !== b.ngay ? (a.ngay < b.ngay ? 1 : -1) : (a.ma < b.ma ? 1 : -1)));
+  if (!list.length) { box.append(el('div', 'muted', t('sup.empty'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['field.ngay', 'field.loai_ho_tro', 'field.hinh_thuc', 'field.staff_id', 'field.noi_dung', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+  list.forEach((r) => {
+    const content = cell(4, null);
+    content.classList.add('wrap');
+    content.append(el('div', 'pre', r.noi_dung));
+    if (r.ghi_chu) content.append(el('div', 'muted pre', r.ghi_chu));
+    const acts = el('div', 'row-actions');
+    const edit = el('button', 'btn', t('staff.edit'));
+    edit.type = 'button'; edit.disabled = sup.saving || !!sup.form;
+    edit.setAttribute('aria-label', t('staff.edit') + ' ' + r.ma);
+    edit.addEventListener('click', () => openSupportForm(r, p));
+    const hide = el('button', 'btn', t('staff.hide'));
+    hide.type = 'button'; hide.disabled = sup.saving;
+    hide.setAttribute('aria-label', t('staff.hide') + ' ' + r.ma);
+    hide.addEventListener('click', () => saveSupport('setHidden', ['SUPPORT_LOG', r.id, true, r.sua_luc], false));
+    acts.append(edit, hide);
+    const actCell = cell(5, null); actCell.append(acts);
+    const tr = el('tr');
+    tr.append(cell(0, r.ngay), cell(1, t('sup.type.' + r.loai_ho_tro)), cell(2, r.hinh_thuc ? t('iv.form.' + r.hinh_thuc) : ''),
+      cell(3, r.staff_id ? staffLabel(r.staff_id) : ''), content, actCell);
+    tr.firstChild.classList.add('nowrap');
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap, el('div', 'muted', t('sup.note')));
+  return box;
+}
+</script>

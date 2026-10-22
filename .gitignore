@@ -1,0 +1,9 @@
+# Không bao giờ commit dữ liệu thật, khóa, hay cấu hình cục bộ
+.clasp.json
+.clasprc.json
+*.csv
+*.xlsx
+.DS_Store
+node_modules/
+# Ngoại lệ: file Excel GIẢ do tests/fixtures/make_legacy_fake.py tạo (mọi tên / số đều bịa), cần cho tests/legacy.test.js
+!tests/fixtures/legacy_fake.xlsx

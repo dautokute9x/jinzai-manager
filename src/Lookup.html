@@ -1,0 +1,122 @@
+<script>
+// Bước 2.1: danh mục Lĩnh vực trong trang Cài đặt — sửa được, có ngày hiệu lực (Q2).
+// Bước 3.1: thêm các loại danh mục khác (quốc tịch, tư cách lưu trú, tiếng Nhật, nguồn) — chọn loại ở đầu mục.
+// Dùng t(), fmt(), el(), render(), runServer() của Index.html; lookupName(), lookupState(), todayJst() của Company.html.
+const LOOKUP_KINDS = ['linh_vuc', 'quoc_tich', 'tu_cach_luu_tru', 'tieng_nhat', 'nguon', 'ly_do_nghi', 'giay_to'];
+let lk = { rows: [], type: 'linh_vuc', loading: false, saving: false, showHidden: false, form: null, error: null };
+
+function loadLookup() {
+  lk.loading = true;
+  runServer('listRecords', ['LOOKUP'],
+    (rows) => { lk.loading = false; lk.rows = rows; render(); },
+    (msg) => { lk.loading = false; lk.error = msg; render(); });
+}
+
+function saveLookup(fn, args, closeForm) {
+  lk.saving = true; lk.error = null; render();
+  runServer(fn, args,
+    () => { lk.saving = false; if (closeForm) lk.form = null; loadLookup(); },
+    (msg) => {
+      lk.saving = false; lk.error = msg;
+      if (msg === t('err.CONFLICT')) { lk.form = null; loadLookup(); }
+      render();
+    });
+}
+
+function renderLookupForm() {
+  const f = lk.form;
+  const form = el('form', 'form');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const data = { loai: lk.type, ten_vi: f.ten_vi, ten_ja: f.ten_ja, tu_ngay: f.tu_ngay, den_ngay: f.den_ngay };
+    if (f.id) saveLookup('updateRecord', ['LOOKUP', f.id, data, f.sua_luc], true);
+    else saveLookup('createRecord', ['LOOKUP', data], true);
+  });
+  const field = (key, type, max) => {
+    const label = el('label', 'field', t('field.' + key) + (key === 'ten_vi' ? ' *' : ''));
+    const input = el('input');
+    input.type = type; input.value = f[key]; input.autocomplete = 'off';
+    if (max) input.maxLength = max;
+    input.addEventListener('input', () => { f[key] = input.value; });
+    label.append(input);
+    return label;
+  };
+  const actions = el('div', 'form-actions');
+  const save = el('button', 'btn-primary', lk.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = lk.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.addEventListener('click', () => { lk.form = null; lk.error = null; render(); });
+  actions.append(save, cancel);
+  form.append(field('ten_vi', 'text', 100), field('ten_ja', 'text', 100), field('tu_ngay', 'date'), field('den_ngay', 'date'), actions);
+  return form;
+}
+
+function renderLookup() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'lookup-h');
+  const h = el('h2', null, t('lookup.title')); h.id = 'lookup-h';
+  box.append(h, el('div', 'muted', t('lookup.desc')));
+  const typeLabel = el('label', 'field', t('lookup.type'));
+  const typeSel = el('select');
+  LOOKUP_KINDS.forEach((k) => { const o = el('option', null, t('lookup.type.' + k)); o.value = k; typeSel.append(o); });
+  typeSel.value = lk.type;
+  typeSel.addEventListener('change', () => { lk.type = typeSel.value; lk.form = null; lk.error = null; render(); });
+  typeLabel.append(typeSel);
+  typeLabel.style.maxWidth = '320px';
+  box.append(typeLabel);
+  if (lk.type === 'linh_vuc') box.append(el('div', 'muted', t('lookup.descLinhVuc')));
+
+  const bar = el('div', 'toolbar');
+  const showLabel = el('label', 'check');
+  const show = el('input'); show.type = 'checkbox'; show.checked = lk.showHidden;
+  show.addEventListener('change', () => { lk.showHidden = show.checked; render(); });
+  showLabel.append(show, document.createTextNode(t('staff.showHidden')));
+  const add = el('button', 'btn-primary', t('lookup.add'));
+  add.type = 'button'; add.disabled = lk.saving;
+  add.addEventListener('click', () => { lk.form = { id: null, ten_vi: '', ten_ja: '', tu_ngay: '', den_ngay: '' }; lk.error = null; render(); });
+  bar.append(showLabel, add);
+  box.append(bar);
+
+  if (lk.form) box.append(renderLookupForm());
+  if (lk.error) box.append(el('div', 'msg-err', lk.error));
+
+  const today = todayJst();
+  const rows = lk.rows.filter((r) => r.loai === lk.type && (lk.showHidden || !r.da_an)).sort((a, b) => (a.ma < b.ma ? -1 : 1));
+  if (lk.loading && !lk.rows.length) box.append(el('div', 'muted', t('setup.loading')));
+  else if (!rows.length) box.append(el('div', 'muted', t('lookup.empty')));
+  else {
+    const wrap = el('div', 'table-wrap');
+    const table = el('table', 'cards');
+    const cols = ['staff.col.ma', 'field.ten_vi', 'field.ten_ja', 'field.tu_ngay', 'field.den_ngay', 'lookup.col.state', 'staff.col.actions'];
+    const head = el('tr');
+    cols.forEach((k) => head.append(el('th', null, t(k))));
+    const thead = el('thead'); thead.append(head);
+    const tbody = el('tbody');
+    const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+    rows.forEach((r) => {
+      const tr = el('tr', r.da_an ? 'hidden-row' : null);
+      const state = lookupState(r, today);
+      const stateCell = cell(5, t('lookup.state.' + state) + (r.da_an ? ' (' + t('staff.hiddenTag') + ')' : ''));
+      if (state !== 'active') stateCell.className = 'msg-warn';
+      const acts = el('div', 'row-actions');
+      const edit = el('button', 'btn', t('staff.edit'));
+      edit.type = 'button'; edit.disabled = lk.saving;
+      edit.addEventListener('click', () => {
+        lk.form = { id: r.id, ten_vi: r.ten_vi, ten_ja: r.ten_ja, tu_ngay: r.tu_ngay, den_ngay: r.den_ngay, sua_luc: r.sua_luc };
+        lk.error = null; render();
+      });
+      const toggle = el('button', 'btn', r.da_an ? t('staff.unhide') : t('staff.hide'));
+      toggle.type = 'button'; toggle.disabled = lk.saving;
+      toggle.addEventListener('click', () => saveLookup('setHidden', ['LOOKUP', r.id, !r.da_an, r.sua_luc], false));
+      acts.append(edit, toggle);
+      const actCell = cell(6, null); actCell.append(acts);
+      tr.append(cell(0, r.ma), cell(1, r.ten_vi), cell(2, r.ten_ja), cell(3, r.tu_ngay || '—'), cell(4, r.den_ngay || '—'), stateCell, actCell);
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    box.append(wrap);
+  }
+  return box;
+}
+</script>

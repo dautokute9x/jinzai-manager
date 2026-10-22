@@ -1,0 +1,433 @@
+<script>
+// GĐ 11.3–11.4 (D-080): trang 定期面談 (kế hoạch theo quý) + trang Vấn đề phát sinh (相談・対応) + mục trong hồ sơ người.
+// Dùng hàm chung của Index / Company / PersonUi / DocsUi / PrepUi (companyInput, staffOptions, asOptions, linkEl, preName, coLabel…).
+let mendan = { data: null, error: null, f: { ky: '', staffId: '', companyId: '', state: 'chua_xong' }, form: null, saving: false };
+let inc = { error: null, f: { state: 'open', loai: '', staffId: '', companyId: '' }, detailId: null, form: null, logForm: null, saving: false };
+
+const quarterLabel = (ky) => { const m = Number(ky.slice(5, 7)); return ky.slice(0, 4) + ' · ' + fmt('md.q', { a: m, b: m + 2 }); };
+
+// ---- 定期面談 ----
+function loadMendan() {
+  mendan.error = null;
+  runServer('getMendanPlan', [Object.assign({}, mendan.f)], (res) => { mendan.data = res; if (!mendan.f.ky) mendan.f.ky = res.ky; render(); }, (msg) => { mendan.error = msg; render(); });
+  [['STAFF', 'staff'], ['COMPANY', 'rows'], ['INCIDENT', 'incidents']].forEach((x) => runServer('listRecords', [x[0]], (rows) => { company[x[1]] = rows; render(); }, () => {}));
+}
+
+function goMendan(ky) {
+  page = 'mendan'; mendan.form = null; if (ky) mendan.f.ky = ky;
+  loadMendan(); render(); window.scrollTo(0, 0);
+}
+
+function mendanSave(fn, args) {
+  mendan.saving = true; mendan.error = null; render();
+  runServer(fn, args,
+    () => { mendan.saving = false; mendan.form = null; loadMendan(); },
+    (msg, raw) => {
+      mendan.saving = false;
+      const field = validationField(raw);
+      if (mendan.form && field) mendan.form.fe = { field: field, msg: msg }; else mendan.error = msg;
+      render();
+    });
+}
+
+function openMendanForm(r) {
+  const keys = ['ngay_du_kien', 'ngay_thuc_hien', 'staff_id', 'hinh_thuc', 'trang_thai', 'noi_dung', 'bien_ban', 'ghi_chu'];
+  const data = {};
+  keys.forEach((k) => { data[k] = r.rec ? r.rec[k] || '' : ''; });
+  if (!r.rec) { data.trang_thai = 'chua_dat_lich'; data.staff_id = (r.support_ids || [])[0] || ''; }
+  mendan.form = { row: r, id: r.rec ? r.rec.id : '', sua_luc: r.rec ? r.rec.sua_luc : '', data: data, fe: null };
+  render();
+}
+
+function renderMendanForm() {
+  const f = mendan.form; const fe = f.fe; const r = f.row;
+  const wrap = el('section', 'stack');
+  wrap.append(el('h3', null, fmt('md.formTitle', { person: r.person_ma + ' · ' + r.person, ky: quarterLabel(mendan.data.ky) })));
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const data = Object.assign({}, f.data);
+    if (f.id) mendanSave('updateRecord', ['MENDAN', f.id, data, f.sua_luc]);
+    else mendanSave('createRecord', ['MENDAN', Object.assign(data, { person_id: r.person_id, employment_id: r.employment_id, ky: mendan.data.ky })]);
+  });
+  form.append(
+    companyInput(f, 'trang_thai', { fe: fe, options: CHOICES.mendanStatuses.map((k) => [k, t('md.status.' + k)]) }),
+    companyInput(f, 'ngay_du_kien', { type: 'date', fe: fe }),
+    companyInput(f, 'ngay_thuc_hien', { type: 'date', fe: fe }),
+    companyInput(f, 'staff_id', { fe: fe, options: asOptions(staffOptions(idList(f.data.staff_id))) }),
+    companyInput(f, 'hinh_thuc', { fe: fe, options: [['', '—']].concat(CHOICES.ivForms.map((k) => [k, t('iv.form.' + k)])) }),
+    companyInput(f, 'bien_ban', { type: 'url', max: 500, fe: fe, placeholder: 'https://drive.google.com/…' }),
+    companyInput(f, 'noi_dung', { textarea: true, max: 2000, wide: true, fe: fe }),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 1000, wide: true, fe: fe }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', mendan.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = mendan.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = mendan.saving;
+  cancel.addEventListener('click', () => { mendan.form = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(form);
+  return wrap;
+}
+
+function selectBox(label, options, value, onChange) {
+  const s = el('select'); s.setAttribute('aria-label', label);
+  options.forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; s.append(op); });
+  s.value = value;
+  s.addEventListener('change', () => onChange(s.value));
+  return s;
+}
+
+function renderMendanPage() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  const root = el('div', 'stack');
+  body.append(root);
+  root.append(el('div', 'muted', t('md.desc')));
+  const d = mendan.data;
+  if (mendan.error) root.append(el('div', 'msg-err', mendan.error));
+  if (!d) { root.append(el('div', 'muted', t('setup.loading'))); return; }
+  const reload = () => { mendan.form = null; loadMendan(); };
+  const filters = el('div', 'filters');
+  filters.append(
+    selectBox(t('field.ky'), d.quarters.map((k) => [k, quarterLabel(k)]), d.ky, (v) => { mendan.f.ky = v; reload(); }),
+    selectBox(t('company.filterStaff'), [['', t('company.filterStaff') + ': ' + t('company.all')]].concat(d.staff.map((s) => [s.id, s.ho_ten + (s.inactive ? ' (' + t('company.inactiveTag') + ')' : '')])), mendan.f.staffId, (v) => { mendan.f.staffId = v; reload(); }),
+    selectBox(t('field.company_id'), [['', t('field.company_id') + ': ' + t('company.all')]].concat(d.companies.map((c) => [c.id, c.label])), mendan.f.companyId, (v) => { mendan.f.companyId = v; reload(); }),
+    selectBox(t('field.trang_thai'), [['', t('field.trang_thai') + ': ' + t('company.all')]].concat(['chua_xong', 'qua_han', 'sap_toi'].concat(CHOICES.mendanStatuses).map((k) => [k, t('md.state.' + k)])), mendan.f.state, (v) => { mendan.f.state = v; reload(); }));
+  root.append(filters);
+  const c = d.counts;
+  root.append(el('div', null, fmt('md.summary', { range: d.start + ' – ' + d.end, total: d.total, done: c.hoan_thanh || 0, plan: c.da_dat_lich || 0, none: c.chua_dat_lich || 0, again: c.can_hen_lai || 0 })));
+  if (mendan.form) root.append(renderMendanForm());
+  if (!d.rows.length) { root.append(el('div', 'muted', t('md.empty'))); return; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards many');
+  const cols = ['field.person_id', 'field.company_id', 'md.col.cs', 'field.trang_thai', 'field.ngay_du_kien', 'field.ngay_thuc_hien', 'field.staff_id', 'field.noi_dung', 'staff.col.actions'];
+  const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  d.rows.forEach((r) => {
+    const tr = el('tr', r.overdue ? 'overdue' : r.state === 'hoan_thanh' ? 'done-row' : null);
+    const cell = (i, nodes) => { const td = el('td'); td.dataset.label = t(cols[i]); nodes.forEach((n) => n && td.append(typeof n === 'string' ? document.createTextNode(n) : n)); return td; };
+    const who = el('button', 'link-btn', r.person_ma + ' · ' + r.person); who.type = 'button';
+    who.addEventListener('click', () => goPersonDetail(r.person_id));
+    const st = el('div', 'stack tight');
+    st.append(el('span', 'badge', t('md.status.' + r.state)));
+    if (r.overdue) st.append(el('span', 'msg-err', t('md.overdue')));
+    if (r.soon) st.append(el('span', null, t('md.soon')));
+    if (r.old_log) st.append(el('span', 'muted', fmt('md.fromLog', { ma: r.old_log.ma, d: r.old_log.ngay })));
+    if (r.open_incidents) st.append(el('span', 'msg-warn', fmt('md.openInc', { n: r.open_incidents })));
+    const rec = r.rec || {};
+    const content = el('div', 'stack tight');
+    if (rec.noi_dung) content.append(el('span', 'pre', rec.noi_dung));
+    if (rec.hinh_thuc) content.append(el('span', 'muted', t('iv.form.' + rec.hinh_thuc)));
+    if (rec.bien_ban) content.append(linkEl(rec.bien_ban, t('field.bien_ban')));
+    const acts = el('div', 'row-actions');
+    const ed = el('button', 'btn', r.rec ? t('staff.edit') : t('md.plan')); ed.type = 'button'; ed.disabled = mendan.saving || !!mendan.form;
+    ed.setAttribute('aria-label', ed.textContent + ' ' + r.person);
+    ed.addEventListener('click', () => openMendanForm(r));
+    const mk = el('button', 'btn', t('md.newIncident')); mk.type = 'button';
+    mk.setAttribute('aria-label', t('md.newIncident') + ' ' + r.person);
+    mk.addEventListener('click', () => goIncidentNew({ person_ids: r.person_id, company_id: r.company_id, mendan_id: r.rec ? r.rec.id : '', loai: 'khac' }));
+    acts.append(ed, mk);
+    tr.append(cell(0, [who]), cell(1, [r.company]), cell(2, [r.support || '—']), cell(3, [st]), cell(4, [rec.ngay_du_kien || '—']), cell(5, [rec.ngay_thuc_hien || '—']),
+      cell(6, [rec.staff_id ? staffLabel(rec.staff_id) : '—']), cell(7, [content]), cell(8, [acts]));
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  root.append(wrap);
+}
+
+// ---- Vấn đề phát sinh ----
+function loadIncidents() {
+  inc.error = null;
+  const fail = (msg) => { inc.error = msg; render(); };
+  [['INCIDENT', 'incidents'], ['INCIDENT_LOG', 'incLogs'], ['MENDAN', 'mendans'], ['STAFF', 'staff'], ['COMPANY', 'rows'], ['EMPLOYMENT', 'emps']]
+    .forEach((x) => runServer('listRecords', [x[0]], (rows) => { company[x[1]] = rows; render(); }, fail));
+  runServer('listRecords', ['PERSON'], (rows) => { person.rows = rows; render(); }, fail);
+}
+
+function goIncident(id) {
+  page = 'incident'; inc.detailId = id; inc.form = null; inc.logForm = null;
+  loadIncidents(); render(); window.scrollTo(0, 0);
+}
+
+function goIncidentNew(pre) {
+  page = 'incident'; inc.detailId = null; loadIncidents(); openIncidentForm(null, pre); window.scrollTo(0, 0);
+}
+
+function incSave(fn, args, onOk) {
+  inc.saving = true; inc.error = null; render();
+  runServer(fn, args,
+    (res) => { inc.saving = false; if (onOk) onOk(res); loadIncidents(); },
+    (msg, raw) => {
+      inc.saving = false;
+      const field = validationField(raw);
+      const f = inc.form || inc.logForm;
+      if (f && field) f.fe = { field: field, msg: msg }; else inc.error = msg;
+      render();
+    });
+}
+
+const INC_KEYS = ['person_ids', 'company_id', 'ngay_tiep_nhan', 'loai', 'tieu_de', 'noi_dung', 'uu_tien', 'phu_trach_staff_id', 'phoi_hop_staff_id',
+  'han_xu_ly', 'trang_thai', 'ngay_lien_he_lai', 'ket_qua', 'mendan_id', 'link', 'ghi_chu'];
+
+function openIncidentForm(row, pre) {
+  const data = {};
+  INC_KEYS.forEach((k) => { data[k] = row ? row[k] || '' : (pre && pre[k]) || ''; });
+  if (!row) { data.ngay_tiep_nhan = data.ngay_tiep_nhan || todayJst(); data.trang_thai = 'moi'; data.uu_tien = data.uu_tien || 'trung_binh'; data.loai = data.loai || 'khac'; }
+  inc.form = { id: row ? row.id : '', ma: row ? row.ma : '', sua_luc: row ? row.sua_luc : '', data: data, fe: null };
+  inc.error = null;
+  render();
+}
+
+// Chọn nhiều người: danh sách đã chọn (bỏ được) + ô chọn thêm (người đang làm ở công ty đã chọn lên đầu).
+function personPicker(f, fe) {
+  const set = el('fieldset', 'field wide');
+  set.append(el('legend', null, t('field.person_ids')));
+  const chosen = idList(f.data.person_ids);
+  const list = el('div', 'filters');
+  chosen.forEach((id) => {
+    const b = el('button', 'btn small', preName(id) + ' ×'); b.type = 'button';
+    b.setAttribute('aria-label', t('fin.splitRemove') + ' ' + preName(id));
+    b.addEventListener('click', () => { f.data.person_ids = chosen.filter((x) => x !== id).join(','); render(); });
+    list.append(b);
+  });
+  if (!chosen.length) list.append(el('span', 'muted', t('inc.noPerson')));
+  const atCo = (company.emps || []).filter((e) => !e.da_an && f.data.company_id && e.company_id === f.data.company_id).map((e) => e.person_id);
+  const people = (person.rows || []).filter((p) => !p.da_an && chosen.indexOf(p.id) < 0)
+    .sort((a, b) => ((atCo.indexOf(b.id) >= 0) - (atCo.indexOf(a.id) >= 0)) || (a.ho_ten_latin < b.ho_ten_latin ? -1 : 1));
+  const add = selectBox(t('inc.addPerson'), [['', t('inc.addPerson')]].concat(people.map((p) => [p.id, p.ma + ' · ' + p.ho_ten_latin])), '', (v) => {
+    if (v) { f.data.person_ids = chosen.concat([v]).join(','); render(); }
+  });
+  set.append(list, add);
+  return markFieldError(set, add, 'person_ids', fe);
+}
+
+function renderIncidentForm() {
+  const f = inc.form; const fe = f.fe;
+  const wrap = el('section', 'stack');
+  wrap.append(el('h3', null, f.id ? fmt('inc.editTitle', { ma: f.ma }) : t('inc.newTitle')));
+  if (f.data.mendan_id) {
+    const m = (company.mendans || []).find((x) => x.id === f.data.mendan_id);
+    if (m) wrap.append(el('div', 'muted', fmt('inc.fromMendan', { ma: m.ma, ky: quarterLabel(m.ky) })));
+  }
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const req = ['tieu_de', 'ngay_tiep_nhan'].find((k) => !String(f.data[k]).trim());
+    if (req) { f.fe = { field: req, msg: fmt('val.required', { field: t('field.' + req) }) }; render(); return; }
+    if (!f.data.person_ids && !f.data.company_id) { f.fe = { field: 'person_ids', msg: t('inc.needWho') }; render(); return; }
+    const data = Object.assign({}, f.data);
+    if (f.id) incSave('updateRecord', ['INCIDENT', f.id, data, f.sua_luc], () => { inc.form = null; });
+    else incSave('createRecord', ['INCIDENT', data], (rec) => { inc.form = null; inc.detailId = rec.id; });
+  });
+  const cos = (company.rows || []).filter((c) => !c.da_an || c.id === f.data.company_id).sort((a, b) => (a.ten_phap_nhan < b.ten_phap_nhan ? -1 : 1)).map((c) => [c.id, coLabel(c.id) + ' (' + c.ma + ')']);
+  const coSel = companyInput(f, 'company_id', { fe: fe, options: [['', '—']].concat(cos) });
+  coSel.querySelector('select').addEventListener('change', () => render()); // sắp lại danh sách người theo công ty
+  form.append(
+    companyInput(f, 'tieu_de', { required: true, max: 200, wide: true, fe: fe }),
+    coSel, personPicker(f, fe),
+    companyInput(f, 'ngay_tiep_nhan', { type: 'date', required: true, fe: fe }),
+    companyInput(f, 'loai', { fe: fe, options: CHOICES.incidentTypes.map((k) => [k, t('inc.type.' + k)]) }),
+    companyInput(f, 'uu_tien', { fe: fe, options: CHOICES.incidentPriorities.map((k) => [k, t('inc.prio.' + k)]) }),
+    companyInput(f, 'trang_thai', { fe: fe, options: CHOICES.incidentStatuses.map((k) => [k, t('inc.status.' + k)]) }),
+    companyInput(f, 'phu_trach_staff_id', { fe: fe, options: asOptions(staffOptions(idList(f.data.phu_trach_staff_id))) }),
+    companyInput(f, 'han_xu_ly', { type: 'date', fe: fe }),
+    companyInput(f, 'ngay_lien_he_lai', { type: 'date', fe: fe }),
+    companyChecks(f, 'phoi_hop_staff_id', staffOptions(idList(f.data.phoi_hop_staff_id)), 'company.noStaff', fe),
+    companyInput(f, 'noi_dung', { textarea: true, max: 2000, wide: true, fe: fe }),
+    companyInput(f, 'ket_qua', { textarea: true, max: 2000, wide: true, fe: fe }),
+    companyInput(f, 'link', { type: 'url', max: 500, fe: fe, placeholder: 'https://drive.google.com/…' }),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 1000, wide: true, fe: fe }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', inc.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = inc.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = inc.saving;
+  cancel.addEventListener('click', () => { inc.form = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(form);
+  return wrap;
+}
+
+const incDue = (x) => [x.han_xu_ly, x.ngay_lien_he_lai].filter(String).sort()[0] || '';
+const incOpen = (x) => CHOICES.incidentDone.indexOf(x.trang_thai) < 0;
+const incWho = (x) => idList(x.person_ids).map(preName).filter(String).join(', ');
+
+function renderIncidentList(root) {
+  const bar = el('div', 'toolbar');
+  const filters = el('div', 'filters');
+  filters.append(
+    selectBox(t('field.trang_thai'), [['open', t('inc.filterOpen')], ['', t('field.trang_thai') + ': ' + t('company.all')]].concat(CHOICES.incidentStatuses.map((k) => [k, t('inc.status.' + k)])), inc.f.state, (v) => { inc.f.state = v; render(); }),
+    selectBox(t('field.loai'), [['', t('field.loai') + ': ' + t('company.all')]].concat(CHOICES.incidentTypes.map((k) => [k, t('inc.type.' + k)])), inc.f.loai, (v) => { inc.f.loai = v; render(); }),
+    selectBox(t('company.filterStaff'), [['', t('company.filterStaff') + ': ' + t('company.all')]].concat((company.staff || []).map((s) => [s.id, staffLabel(s.id)])), inc.f.staffId, (v) => { inc.f.staffId = v; render(); }),
+    selectBox(t('field.company_id'), [['', t('field.company_id') + ': ' + t('company.all')]].concat((company.rows || []).filter((c) => !c.da_an).map((c) => [c.id, c.ma + ' · ' + c.ten_phap_nhan])), inc.f.companyId, (v) => { inc.f.companyId = v; render(); }));
+  const add = el('button', 'btn-primary', t('inc.add'));
+  add.type = 'button'; add.disabled = inc.saving || !!inc.form;
+  add.addEventListener('click', () => openIncidentForm(null, null));
+  bar.append(filters, add);
+  root.append(bar, el('div', 'muted', t('inc.desc')));
+  if (inc.form) root.append(renderIncidentForm());
+  if (inc.error) root.append(el('div', 'msg-err', inc.error));
+  if (!company.incidents) { root.append(el('div', 'muted', t('setup.loading'))); return; }
+  const f = inc.f;
+  const today = todayJst();
+  const prio = (x) => CHOICES.incidentPriorities.indexOf(x.uu_tien);
+  const rows = company.incidents.filter((x) => !x.da_an)
+    .filter((x) => (f.state === 'open' ? incOpen(x) : !f.state || x.trang_thai === f.state))
+    .filter((x) => !f.loai || x.loai === f.loai)
+    .filter((x) => !f.staffId || x.phu_trach_staff_id === f.staffId || idList(x.phoi_hop_staff_id).indexOf(f.staffId) >= 0)
+    .filter((x) => !f.companyId || x.company_id === f.companyId)
+    .sort((a, b) => (incOpen(b) - incOpen(a)) || ((incDue(a) || '9') < (incDue(b) || '9') ? -1 : (incDue(a) || '9') > (incDue(b) || '9') ? 1 : 0) || (prio(a) - prio(b)) || (a.ma < b.ma ? 1 : -1));
+  if (!rows.length) { root.append(el('div', 'muted', t('inc.empty'))); return; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['field.tieu_de', 'field.ngay_tiep_nhan', 'field.loai', 'field.uu_tien', 'inc.col.who', 'field.phu_trach_staff_id', 'inc.col.due', 'field.trang_thai'];
+  const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  rows.forEach((x) => {
+    const late = incOpen(x) && incDue(x) && incDue(x) < today;
+    const tr = el('tr', late ? 'overdue' : !incOpen(x) ? 'done-row' : null);
+    const cell = (i, n) => { const td = el('td'); td.dataset.label = t(cols[i]); td.append(typeof n === 'string' ? document.createTextNode(n) : n); return td; };
+    const open = el('button', 'link-btn', x.ma + ' · ' + x.tieu_de); open.type = 'button';
+    open.addEventListener('click', () => { inc.detailId = x.id; inc.form = null; inc.logForm = null; render(); window.scrollTo(0, 0); });
+    const who = el('div', 'stack tight');
+    if (x.company_id) who.append(el('span', null, coLabel(x.company_id)));
+    if (x.person_ids) who.append(el('span', 'muted', incWho(x)));
+    const due = el('span', late ? 'msg-err' : null, incDue(x) || '—');
+    tr.append(cell(0, open), cell(1, x.ngay_tiep_nhan), cell(2, t('inc.type.' + x.loai)), cell(3, el('span', x.uu_tien === 'cao' ? 'badge msg-err' : 'badge', t('inc.prio.' + x.uu_tien))),
+      cell(4, who), cell(5, x.phu_trach_staff_id ? staffLabel(x.phu_trach_staff_id) : '—'), cell(6, due), cell(7, t('inc.status.' + x.trang_thai)));
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  root.append(wrap);
+}
+
+function renderIncidentLogs(x) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'inc-log-h');
+  const h = el('h3', null, t('inc.logTitle')); h.id = 'inc-log-h';
+  box.append(h);
+  const logs = (company.incLogs || []).filter((l) => l.incident_id === x.id && !l.da_an).sort((a, b) => (a.ngay !== b.ngay ? (a.ngay < b.ngay ? 1 : -1) : (a.ma < b.ma ? 1 : -1)));
+  if (!logs.length) box.append(el('div', 'muted', t('inc.noLog')));
+  const ul = el('ul', 'history');
+  logs.forEach((l) => {
+    const li = el('li');
+    li.append(el('strong', 'nowrap', l.ngay), el('span', null, ' ' + (l.staff_id ? staffLabel(l.staff_id) + ': ' : '')), el('span', 'pre', l.noi_dung));
+    if (l.link) li.append(document.createTextNode(' '), linkEl(l.link));
+    const hide = el('button', 'btn small', t('inc.logHide')); hide.type = 'button'; hide.disabled = inc.saving;
+    hide.setAttribute('aria-label', t('inc.logHide') + ' ' + l.ngay);
+    hide.addEventListener('click', () => incSave('setHidden', ['INCIDENT_LOG', l.id, true, l.sua_luc]));
+    li.append(document.createTextNode(' '), hide);
+    ul.append(li);
+  });
+  box.append(ul);
+  if (!inc.logForm) inc.logForm = { data: { ngay: todayJst(), staff_id: x.phu_trach_staff_id || '', noi_dung: '', link: '' }, fe: null };
+  const f = inc.logForm;
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!f.data.noi_dung.trim()) { f.fe = { field: 'noi_dung', msg: fmt('val.required', { field: t('field.noi_dung') }) }; render(); return; }
+    incSave('createRecord', ['INCIDENT_LOG', Object.assign({ incident_id: x.id }, f.data)], () => { inc.logForm = null; });
+  });
+  form.append(companyInput(f, 'ngay', { type: 'date', fe: f.fe }),
+    companyInput(f, 'staff_id', { fe: f.fe, options: asOptions(staffOptions(idList(f.data.staff_id))) }),
+    companyInput(f, 'noi_dung', { textarea: true, max: 2000, wide: true, fe: f.fe }),
+    companyInput(f, 'link', { type: 'url', max: 500, fe: f.fe, placeholder: 'https://drive.google.com/…' }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', inc.saving ? t('ui.saving') : t('inc.logAdd'));
+  save.type = 'submit'; save.disabled = inc.saving;
+  actions.append(save);
+  form.append(actions);
+  box.append(el('div', 'muted', t('inc.logNote')), form);
+  return box;
+}
+
+function renderIncidentDetail(root) {
+  const back = el('button', 'btn', t('inc.back'));
+  back.type = 'button';
+  back.addEventListener('click', () => { inc.detailId = null; inc.form = null; inc.logForm = null; render(); });
+  root.append(back);
+  const x = (company.incidents || []).find((r) => r.id === inc.detailId);
+  if (!x) { root.append(el('div', 'muted', company.incidents ? t('err.NOT_FOUND') : t('setup.loading'))); return; }
+  const head = el('div', 'toolbar');
+  head.append(el('h2', null, x.ma + ' · ' + x.tieu_de));
+  const edit = el('button', 'btn', t('staff.edit'));
+  edit.type = 'button'; edit.disabled = inc.saving || !!inc.form;
+  edit.addEventListener('click', () => openIncidentForm(x));
+  head.append(edit);
+  root.append(head);
+  if (inc.form) root.append(renderIncidentForm());
+  if (inc.error) root.append(el('div', 'msg-err', inc.error));
+  const info = el('dl', 'info');
+  const m = x.mendan_id ? (company.mendans || []).find((r) => r.id === x.mendan_id) : null;
+  [['trang_thai', t('inc.status.' + x.trang_thai)], ['loai', t('inc.type.' + x.loai)], ['uu_tien', t('inc.prio.' + x.uu_tien)], ['ngay_tiep_nhan', x.ngay_tiep_nhan],
+    ['company_id', coLabel(x.company_id)], ['phu_trach_staff_id', x.phu_trach_staff_id ? staffLabel(x.phu_trach_staff_id) : ''],
+    ['phoi_hop_staff_id', idList(x.phoi_hop_staff_id).map(staffLabel).join(', ')], ['han_xu_ly', x.han_xu_ly], ['ngay_lien_he_lai', x.ngay_lien_he_lai],
+    ['mendan_id', m ? m.ma + ' · ' + quarterLabel(m.ky) : ''], ['noi_dung', x.noi_dung], ['ket_qua', x.ket_qua], ['ghi_chu', x.ghi_chu]]
+    .forEach((p) => { info.append(el('dt', null, t('field.' + p[0])), el('dd', 'pre', p[1] || '—')); });
+  info.append(el('dt', null, t('field.person_ids')));
+  const dd = el('dd', 'stack tight');
+  idList(x.person_ids).forEach((id) => { const b = el('button', 'link-btn', preName(id)); b.type = 'button'; b.addEventListener('click', () => goPersonDetail(id)); dd.append(b); });
+  if (!x.person_ids) dd.append(document.createTextNode('—'));
+  info.append(dd, el('dt', null, t('field.link')), el('dd', null));
+  info.lastChild.append(linkEl(x.link));
+  info.append(el('dt', null, t('inc.updated')), el('dd', null, String(x.sua_luc || '').slice(0, 16)));
+  root.append(info, renderIncidentLogs(x));
+}
+
+function renderIncidentPage() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  const root = el('div', 'stack');
+  if (inc.detailId) renderIncidentDetail(root); else renderIncidentList(root);
+  body.append(root);
+}
+
+// ---- Trong hồ sơ người: lịch sử 定期面談 + vấn đề ----
+function renderPersonSupport(p) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'person-md-h');
+  const h = el('h2', null, t('nav.mendan')); h.id = 'person-md-h';
+  box.append(h);
+  const mds = (company.mendans || []).filter((m) => m.person_id === p.id && !m.da_an).sort((a, b) => (a.ky < b.ky ? 1 : -1));
+  if (!mds.length) box.append(el('div', 'muted', t('md.personEmpty')));
+  const ul = el('ul', 'history');
+  mds.forEach((m) => {
+    const li = el('li');
+    const b = el('button', 'link-btn', quarterLabel(m.ky)); b.type = 'button';
+    b.addEventListener('click', () => goMendan(m.ky));
+    li.append(b, el('span', null, ' · ' + t('md.status.' + m.trang_thai) + ' · ' + (m.ngay_thuc_hien || m.ngay_du_kien || '—') + (m.staff_id ? ' · ' + staffLabel(m.staff_id) : '')));
+    if (m.noi_dung) li.append(el('div', 'pre muted', m.noi_dung));
+    ul.append(li);
+  });
+  box.append(ul);
+  const h2 = el('div', 'toolbar');
+  const hh = el('h2', null, t('nav.incident'));
+  const add = el('button', 'btn', t('inc.add')); add.type = 'button';
+  const emp = (company.emps || []).filter((e) => e.person_id === p.id && !e.da_an).sort((a, b) => ((a.ngay_vao_lam || '') < (b.ngay_vao_lam || '') ? 1 : -1))[0];
+  add.addEventListener('click', () => goIncidentNew({ person_ids: p.id, company_id: emp ? emp.company_id : '' }));
+  h2.append(hh, add);
+  box.append(h2);
+  const list = (company.incidents || []).filter((x) => !x.da_an && idList(x.person_ids).indexOf(p.id) >= 0).sort((a, b) => (a.ngay_tiep_nhan < b.ngay_tiep_nhan ? 1 : -1));
+  if (!list.length) { box.append(el('div', 'muted', t('inc.personEmpty'))); return box; }
+  const ul2 = el('ul', 'history');
+  list.forEach((x) => {
+    const li = el('li');
+    const b = el('button', 'link-btn', x.ma + ' · ' + x.tieu_de); b.type = 'button';
+    b.addEventListener('click', () => goIncident(x.id));
+    li.append(el('strong', 'nowrap', x.ngay_tiep_nhan + ' '), b, el('span', incOpen(x) ? 'msg-warn' : 'muted', ' · ' + t('inc.type.' + x.loai) + ' · ' + t('inc.status.' + x.trang_thai)));
+    ul2.append(li);
+  });
+  box.append(ul2);
+  return box;
+}
+</script>

@@ -1,0 +1,402 @@
+<script>
+// Bước 3.1: trang Con người — danh sách, hồ sơ, số giấy tờ (che, bấm "Hiện"), cảnh báo nghi trùng (D-051).
+// Dùng t(), fmt(), el(), render(), runServer(), CHOICES của Index.html;
+// company (staff, lookup), companyInput(), companyChecks(), validationField(), idList(), lookupName(), lookupState(),
+// lookupLabel(), staffLabel(), staffOptions(), todayJst() của Company.html.
+const PERSON_FIELDS = ['ho_ten_latin', 'ho_ten_katakana', 'ngay_sinh', 'gioi_tinh', 'quoc_tich', 'so_dien_thoai', 'email', 'dia_chi', 'noi_o',
+  'tu_cach_luu_tru', 'han_luu_tru', 'han_ho_chieu', 'tieng_nhat', 'ky_nang', 'trang_thai_sang_loc', 'recruiter_staff_id', 'nguon', 'ghi_chu',
+  'nguoi_gioi_thieu', 'cs_staff_id', 'giay_to_staff_id'];
+let person = { rows: [], loading: 0, saving: false, error: null, form: null, fieldErr: null, dups: null,
+  q: '', fStatus: '', fRecruiter: '', fNationality: '', showHidden: false, listBox: null, detailId: null, docs: null };
+
+// Tìm tên không dấu, không phân biệt hoa/thường, toàn/bán độ rộng (giống cách so trùng ở máy chủ).
+const plain = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[đĐ]/g, 'd').normalize('NFKC').toLowerCase();
+
+function loadPeople() {
+  person.loading = 15; person.error = null;
+  const fail = (msg) => { person.loading--; person.error = msg; render(); };
+  const into = (obj, key) => (rows) => { obj[key] = rows; person.loading--; render(); };
+  runServer('listRecords', ['PERSON'], into(person, 'rows'), fail);
+  runServer('listRecords', ['STAFF'], into(company, 'staff'), fail);
+  runServer('listRecords', ['LOOKUP'], into(company, 'lookup'), fail);
+  // Bước 3.2: lần giới thiệu + đơn + công ty để hiện và chọn đơn trong hồ sơ.
+  runServer('listRecords', ['APPLICATION'], into(company, 'apps'), fail);
+  runServer('listRecords', ['JOB_ORDER'], into(company, 'jobs'), fail);
+  runServer('listRecords', ['COMPANY'], into(company, 'rows'), fail);
+  runServer('listRecords', ['EMPLOYMENT'], into(company, 'emps'), fail); // bước 3.4
+  runServer('listRecords', ['IMMIGRATION_CASE'], into(company, 'cases'), fail); // bước 6.2
+  runServer('listRecords', ['CASE_DOCUMENT'], into(company, 'caseDocs'), fail); // bước 6.3
+  runServer('listRecords', ['FILE'], into(company, 'files'), fail); // bước 6.4
+  runServer('listRecords', ['PERSON_DOC'], into(company, 'personDocs'), fail); // GĐ 11.1
+  runServer('listRecords', ['PRE_ENTRY'], into(company, 'pres'), fail); // GĐ 11.2
+  runServer('listRecords', ['MENDAN'], into(company, 'mendans'), fail); // GĐ 11.3
+  runServer('listRecords', ['INCIDENT'], into(company, 'incidents'), fail); // GĐ 11.4
+}
+
+// Chọn mới: mục chưa ẩn, đang hiệu lực; mục đã chọn từ trước luôn giữ (kèm ghi chú).
+function lookupChoices(loai, current) {
+  const today = todayJst();
+  const chosen = idList(current);
+  return company.lookup
+    .filter((r) => r.loai === loai && ((!r.da_an && lookupState(r, today) === 'active') || chosen.indexOf(r.id) >= 0))
+    .sort((a, b) => (a.ma < b.ma ? -1 : 1))
+    .map((r) => ({ id: r.id, text: lookupName(r), tag: !r.da_an && lookupState(r, today) === 'active' ? '' : t('company.expiredTag') }));
+}
+const asOptions = (list) => [['', '—']].concat(list.map((o) => [o.id, o.text + (o.tag ? ' (' + o.tag + ')' : '')]));
+
+function openPersonForm(row) {
+  const data = {};
+  PERSON_FIELDS.forEach((k) => { data[k] = row ? row[k] || '' : ''; });
+  if (!row) data.trang_thai_sang_loc = 'moi_nhan';
+  data.so_ho_chieu = ''; data.so_zairyu_card = ''; // trống = giữ nguyên số đang có
+  person.form = { id: row ? row.id : '', ma: row ? row.ma : '', sua_luc: row ? row.sua_luc : '', data: data, justOpened: true };
+  person.error = null; person.fieldErr = null; person.dups = null;
+  render();
+}
+
+function submitPerson(confirmDuplicate) {
+  const f = person.form;
+  // D-079: ngày sinh / quốc tịch bắt buộc khi thêm mới; hồ sơ cũ nhập từ file thiếu thì vẫn sửa được phần khác.
+  const req = (f.id ? ['ho_ten_latin'] : ['ho_ten_latin', 'ngay_sinh', 'quoc_tich']).find((k) => !String(f.data[k]).trim());
+  if (req) { person.fieldErr = { field: req, msg: fmt('val.required', { field: t('field.' + req) }) }; render(); return; }
+  person.saving = true; person.error = null; person.fieldErr = null; render();
+  runServer('savePerson', [f.id, f.data, f.sua_luc, !!confirmDuplicate],
+    (res) => {
+      person.saving = false;
+      if (res.duplicates) { person.dups = res.duplicates; render(); return; }
+      person.form = null; person.dups = null;
+      if (!f.id) person.detailId = res.person.id; // vừa thêm → mở hồ sơ
+      loadPeople();
+      if (person.detailId === res.person.id) loadDocs(res.person.id, false);
+    },
+    (msg, raw) => {
+      person.saving = false;
+      const field = validationField(raw);
+      if (field) person.fieldErr = { field: field, msg: msg }; else person.error = msg;
+      if (msg === t('err.CONFLICT')) { person.form = null; loadPeople(); }
+      render();
+    });
+}
+
+function loadDocs(id, reveal) {
+  person.docs = { loading: true };
+  runServer('getPersonDocs', [id, reveal],
+    (res) => { person.docs = res; render(); },
+    (msg) => { person.docs = { error: msg }; render(); });
+}
+
+function openPerson(id) {
+  person.sheet = null;
+  person.detailId = id; person.form = null; person.dups = null; person.error = null;
+  appl.form = null; appl.statusForm = null; appl.historyId = null; appl.logs = null; appl.error = null;
+  iv.appId = null; iv.form = null; iv.suggest = null; iv.error = null;
+  emp.form = null; emp.error = null; appl.jobFull = null;
+  visa.form = null; visa.error = null; visa.docsFor = null; visa.docEdits = {};
+  sup.form = null; sup.error = null; sup.rows = null;
+  loadDocs(id, false);
+  loadSupport(); // bước 7.2
+  render();
+  window.scrollTo(0, 0);
+}
+
+// ---- Form ----
+function renderDupWarning() {
+  const box = el('div', 'confirm msg-warn');
+  box.setAttribute('role', 'alert');
+  box.append(el('strong', null, t('person.dupTitle')));
+  const ul = el('ul', 'links');
+  person.dups.forEach((d) => {
+    const li = el('li');
+    const b = el('button', 'link-btn', d.ma + ' · ' + d.ho_ten_latin + ' · ' + d.ngay_sinh + (d.da_an ? ' (' + t('staff.hiddenTag') + ')' : ''));
+    b.type = 'button'; b.addEventListener('click', () => openPerson(d.id));
+    li.append(b, el('span', null, ' — ' + d.reasons.map((r) => t('person.dupReason.' + r)).join(', ')));
+    ul.append(li);
+  });
+  box.append(ul, el('div', 'muted', t('person.dupHint')));
+  const actions = el('div', 'row-actions');
+  const yes = el('button', 'btn-primary', person.saving ? t('ui.saving') : t('person.dupSave'));
+  yes.type = 'button'; yes.disabled = person.saving;
+  yes.addEventListener('click', () => submitPerson(true));
+  const no = el('button', 'btn', t('person.dupBack'));
+  no.type = 'button'; no.addEventListener('click', () => { person.dups = null; render(); });
+  actions.append(yes, no);
+  box.append(actions);
+  return box;
+}
+
+function renderPersonForm() {
+  const f = person.form;
+  const fe = person.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.setAttribute('aria-labelledby', 'person-form-h');
+  const h = el('h3', null, f.id ? fmt('person.editTitle', { ma: f.ma }) : t('person.newTitle')); h.id = 'person-form-h';
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitPerson(false); });
+  const opt = (k) => ({ fe: fe, options: asOptions(lookupChoices(k, f.data[k])) });
+  const fixed = (key, codes, prefix) => ({ fe: fe, options: [['', '—']].concat(codes.map((c) => [c, t(prefix + c)])) });
+  const staff = staffOptions(idList(f.data.recruiter_staff_id));
+  const docs = person.docs && !person.docs.loading && person.detailId === f.id ? person.docs : {};
+  const docHint = (k) => (f.id && docs[k] ? fmt('person.docKeep', { v: docs[k] }) : '');
+  form.append(
+    companyInput(f, 'ho_ten_latin', { required: true, max: 100, fe: fe, placeholder: 'NGUYEN VAN A' }),
+    companyInput(f, 'ho_ten_katakana', { max: 100, fe: fe }),
+    companyInput(f, 'ngay_sinh', { required: !f.id, type: 'date', fe: fe }),
+    companyInput(f, 'gioi_tinh', fixed('gioi_tinh', CHOICES.genders, 'person.gender.')),
+    companyInput(f, 'quoc_tich', Object.assign(opt('quoc_tich'), { required: !f.id })),
+    companyInput(f, 'trang_thai_sang_loc', { fe: fe, options: CHOICES.screening.map((s) => [s, t('person.status.' + s)]) }),
+    companyInput(f, 'recruiter_staff_id', { fe: fe, options: asOptions(staff) }),
+    companyInput(f, 'giay_to_staff_id', { fe: fe, options: asOptions(staffOptions(idList(f.data.giay_to_staff_id))) }),
+    companyChecks(f, 'cs_staff_id', staffOptions(idList(f.data.cs_staff_id)), 'company.noStaff', fe),
+    companyInput(f, 'nguon', opt('nguon')),
+    companyInput(f, 'nguoi_gioi_thieu', { max: 100, fe: fe, placeholder: t('person.referrerHint') }),
+    companyInput(f, 'so_dien_thoai', { max: 20, type: 'tel', fe: fe }),
+    companyInput(f, 'email', { max: 254, type: 'email', fe: fe }),
+    companyInput(f, 'noi_o', fixed('noi_o', CHOICES.residences, 'person.noiO.')),
+    companyInput(f, 'dia_chi', { max: 300, fe: fe }),
+    companyInput(f, 'tu_cach_luu_tru', opt('tu_cach_luu_tru')),
+    companyInput(f, 'han_luu_tru', { type: 'date', fe: fe }),
+    companyInput(f, 'han_ho_chieu', { type: 'date', fe: fe }),
+    companyInput(f, 'tieng_nhat', opt('tieng_nhat')),
+    companyChecks(f, 'ky_nang', lookupChoices('linh_vuc', f.data.ky_nang), 'company.noLookup', fe),
+    companyInput(f, 'so_ho_chieu', { max: 20, fe: fe, placeholder: docHint('so_ho_chieu') }),
+    companyInput(f, 'so_zairyu_card', { max: 20, fe: fe, placeholder: docHint('so_zairyu_card') }),
+    el('div', 'muted wide', t('person.docNote')),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 2000, wide: true, fe: fe }));
+  form.querySelectorAll('input[name="so_ho_chieu"], input[name="so_zairyu_card"]').forEach((i) => { i.autocomplete = 'off'; i.spellcheck = false; });
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', person.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = person.saving || !!person.dups;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = person.saving;
+  cancel.addEventListener('click', () => { person.form = null; person.fieldErr = null; person.dups = null; person.error = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(h);
+  if (person.dups) wrap.append(renderDupWarning());
+  wrap.append(form);
+  if (f.justOpened && !fe) { f.justOpened = false; setTimeout(() => { const first = form.querySelector('input'); if (first) first.focus(); }, 0); }
+  return wrap;
+}
+
+// ---- Hồ sơ ----
+function renderPersonDetail() {
+  const root = el('div', 'stack');
+  const back = el('button', 'btn', t('person.back'));
+  back.type = 'button';
+  back.addEventListener('click', () => { person.detailId = null; person.form = null; person.dups = null; person.docs = null; render(); });
+  root.append(back);
+  const r = person.rows.find((x) => x.id === person.detailId);
+  if (!r) { root.append(el('div', 'muted', person.loading ? t('setup.loading') : t('err.NOT_FOUND'))); return root; }
+  const head = el('div', 'toolbar');
+  head.append(el('h2', null, r.ma + ' · ' + r.ho_ten_latin + (r.da_an ? ' (' + t('staff.hiddenTag') + ')' : '')));
+  const edit = el('button', 'btn', t('staff.edit'));
+  edit.type = 'button'; edit.disabled = person.saving || !!person.form;
+  edit.addEventListener('click', () => openPersonForm(r));
+  const sheetBtn = el('button', 'btn', t('ref.open'));
+  sheetBtn.type = 'button'; sheetBtn.setAttribute('aria-expanded', String(!!person.sheet));
+  sheetBtn.addEventListener('click', () => { person.sheet = person.sheet ? null : { comment: '' }; if (person.sheet && !fin.data) loadFinance(); render(); });
+  head.append(edit, sheetBtn);
+  root.append(head);
+  if (person.sheet) root.append(renderReferralSheet(r));
+  if (person.form) root.append(renderPersonForm());
+  if (person.error) root.append(el('div', 'msg-err', person.error));
+
+  const lk = (id) => (id ? lookupLabel(id) : '');
+  const info = el('dl', 'info');
+  const life = lifecycleOf(r.id);
+  info.append(el('dt', null, t('app.life.title')), el('dd', life ? 'badge-dd' : null, life ? t('app.life.' + life) : t('app.life.none')));
+  [['ho_ten_katakana', r.ho_ten_katakana], ['ngay_sinh', r.ngay_sinh], ['gioi_tinh', r.gioi_tinh ? t('person.gender.' + r.gioi_tinh) : ''],
+    ['quoc_tich', lk(r.quoc_tich)], ['trang_thai_sang_loc', t('person.status.' + r.trang_thai_sang_loc)],
+    ['recruiter_staff_id', r.recruiter_staff_id ? staffLabel(r.recruiter_staff_id) : ''],
+    ['cs_staff_id', idList(r.cs_staff_id).map(staffLabel).join(', ')], ['giay_to_staff_id', r.giay_to_staff_id ? staffLabel(r.giay_to_staff_id) : ''],
+    ['nguon', lk(r.nguon)], ['nguoi_gioi_thieu', r.nguoi_gioi_thieu],
+    ['so_dien_thoai', r.so_dien_thoai], ['email', r.email], ['noi_o', r.noi_o ? t('person.noiO.' + r.noi_o) : ''], ['dia_chi', r.dia_chi],
+    ['tu_cach_luu_tru', lk(r.tu_cach_luu_tru)], ['han_luu_tru', r.han_luu_tru], ['han_ho_chieu', r.han_ho_chieu],
+    ['tieng_nhat', lk(r.tieng_nhat)], ['ky_nang', idList(r.ky_nang).map(lookupLabel).join(', ')], ['ghi_chu', r.ghi_chu]]
+    .forEach((p) => { info.append(el('dt', null, t('field.' + p[0])), el('dd', null, p[1] || '—')); });
+  root.append(info);
+
+  // Số giấy tờ: mặc định che; bấm "Hiện" mới lấy số đầy đủ từ máy chủ (3.1 Q3).
+  const docBox = el('section', 'stack');
+  docBox.setAttribute('aria-labelledby', 'person-docs-h');
+  const dh = el('div', 'toolbar');
+  const dTitle = el('h2', null, t('person.docsTitle')); dTitle.id = 'person-docs-h';
+  dh.append(dTitle);
+  const d = person.docs || {};
+  if (can('so_giay_to') && !d.loading && !d.error && (d.so_ho_chieu || d.so_zairyu_card)) { // D-077: không có quyền thì chỉ thấy số đã che
+    const toggle = el('button', 'btn', d.revealed ? t('person.docHide') : t('person.docShow'));
+    toggle.type = 'button';
+    toggle.addEventListener('click', () => loadDocs(r.id, !d.revealed));
+    dh.append(toggle);
+  }
+  docBox.append(dh);
+  if (d.loading) docBox.append(el('div', 'muted', t('setup.loading')));
+  else if (d.error) docBox.append(el('div', 'msg-err', d.error));
+  else {
+    const dl = el('dl', 'info');
+    ['so_ho_chieu', 'so_zairyu_card'].forEach((k) => dl.append(el('dt', null, t('field.' + k)), el('dd', 'mono', d[k] || '—')));
+    docBox.append(dl, el('div', 'muted', t('person.docsNote')));
+  }
+  root.append(docBox, renderPersonLibrary(r), renderPersonApps(r), renderPersonPres(r), renderEmployments(r), renderPersonSupport(r), renderSupportLogs(r), renderPersonCases(r));
+  return root;
+}
+
+// ---- Phiếu giới thiệu ứng viên (D-074): bản in tiếng Nhật gửi khách — KHÔNG có liên lạc, địa chỉ, số giấy tờ ----
+function ageOn(birth, today) {
+  if (!birth) return '';
+  const b = birth.split('-').map(Number); const n = today.split('-').map(Number);
+  return n[0] - b[0] - (n[1] < b[1] || (n[1] === b[1] && n[2] < b[2]) ? 1 : 0);
+}
+
+function renderReferralSheet(r) {
+  const today = todayJst();
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'ref-h');
+  const h = el('h2', 'no-print', t('ref.title')); h.id = 'ref-h';
+  box.append(h, el('div', 'muted no-print', t('ref.desc')));
+  const lab = el('label', 'field wide no-print', t('ref.comment'));
+  const ta = el('textarea'); ta.rows = 3; ta.maxLength = 1000; ta.value = person.sheet.comment;
+  ta.addEventListener('input', () => { person.sheet.comment = ta.value; const c = document.getElementById('ref-comment'); if (c) c.textContent = ta.value; });
+  lab.append(ta);
+  const print = el('button', 'btn-primary no-print', t('inv.print'));
+  print.type = 'button';
+  print.addEventListener('click', () => { runServer('logReferralSheet', [r.id], () => {}, () => {}); window.print(); });
+  box.append(lab, print);
+  const ja = (id) => { const l = company.lookup.find((x) => x.id === id); return l ? (l.ten_ja || l.ten_vi) : ''; };
+  const sheet = el('section', 'invoice-sheet print-area');
+  sheet.setAttribute('aria-label', '人材紹介票 ' + r.ma);
+  const top = el('div', 'inv-top');
+  top.append(el('div', 'inv-title', '人材紹介票'), el('div', 'inv-from', '作成日：' + today + '\n' + (fin.data && fin.data.issuer_name ? fin.data.issuer_name : '') +
+    (r.recruiter_staff_id ? '\n担当：' + staffName(r.recruiter_staff_id) : '')));
+  top.lastChild.classList.add('pre');
+  sheet.append(top);
+  const rows = [['氏名', r.ho_ten_latin], ['フリガナ', r.ho_ten_katakana], ['国籍', ja(r.quoc_tich)],
+    ['生年月日', r.ngay_sinh ? r.ngay_sinh + '（' + ageOn(r.ngay_sinh, today) + '歳）' : ''], ['性別', r.gioi_tinh ? I18N.ja['person.gender.' + r.gioi_tinh] : ''],
+    ['在留資格', ja(r.tu_cach_luu_tru)], ['在留期限', r.han_luu_tru], ['現在地', r.noi_o ? I18N.ja['person.noiO.' + r.noi_o] : ''],
+    ['日本語', ja(r.tieng_nhat)], ['技能分野', idList(r.ky_nang).map(ja).filter(String).join('、')]];
+  const table = el('table', 'inv-lines');
+  rows.forEach((p) => { const tr = el('tr'); tr.append(el('th', null, p[0]), el('td', null, p[1] || '—')); table.append(tr); });
+  sheet.append(table, el('div', null, '推薦コメント'));
+  const c = el('div', 'pre ref-comment', person.sheet.comment); c.id = 'ref-comment';
+  sheet.append(c, el('div', 'muted', '人材コード：' + r.ma + '　※ 連絡先・旅券番号等の個人情報は記載していません。'));
+  box.append(sheet);
+  return box;
+}
+
+// ---- Danh sách ----
+function visiblePeople() {
+  const q = plain(person.q.trim());
+  return person.rows
+    .filter((r) => person.showHidden || !r.da_an)
+    .filter((r) => !q || [r.ma, r.ho_ten_latin, r.ho_ten_katakana, r.so_dien_thoai, r.email].some((x) => plain(x).indexOf(q) >= 0))
+    .filter((r) => !person.fStatus || r.trang_thai_sang_loc === person.fStatus)
+    .filter((r) => !person.fRecruiter || r.recruiter_staff_id === person.fRecruiter)
+    .filter((r) => !person.fNationality || r.quoc_tich === person.fNationality)
+    .sort((a, b) => (a.ma < b.ma ? -1 : 1));
+}
+
+function personListEl() {
+  const box = el('div', 'stack');
+  if (person.loading && !person.rows.length) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const total = person.rows.filter((r) => !r.da_an).length;
+  if (!total && !person.showHidden) { box.append(el('div', 'muted', t('person.empty'))); return box; }
+  const list = visiblePeople();
+  box.append(el('div', 'muted', fmt('person.count', { n: list.length, total: total })));
+  if (!list.length) { box.append(el('div', 'muted', t('person.noMatch'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards many');
+  const cols = ['staff.col.ma', 'field.ho_ten_latin', 'field.ngay_sinh', 'field.quoc_tich', 'field.tu_cach_luu_tru', 'field.han_luu_tru',
+    'field.tieng_nhat', 'field.recruiter_staff_id', 'field.trang_thai_sang_loc', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+  const lk = (id) => (id ? lookupLabel(id) : '');
+  list.forEach((r) => {
+    const tr = el('tr', r.da_an ? 'hidden-row' : null);
+    const name = cell(1, null);
+    const open = el('button', 'link-btn', r.ho_ten_latin);
+    open.type = 'button'; open.addEventListener('click', () => openPerson(r.id));
+    name.append(open);
+    if (r.ho_ten_katakana) name.append(el('div', 'muted', r.ho_ten_katakana));
+    if (r.da_an) name.append(el('span', 'muted', ' (' + t('staff.hiddenTag') + ')'));
+    const acts = el('div', 'row-actions');
+    const edit = el('button', 'btn', t('staff.edit'));
+    edit.type = 'button'; edit.disabled = person.saving;
+    edit.setAttribute('aria-label', t('staff.edit') + ' ' + r.ma);
+    edit.addEventListener('click', () => { openPerson(r.id); openPersonForm(r); });
+    const toggle = el('button', 'btn', r.da_an ? t('staff.unhide') : t('staff.hide'));
+    toggle.type = 'button'; toggle.disabled = person.saving;
+    toggle.setAttribute('aria-label', (r.da_an ? t('staff.unhide') : t('staff.hide')) + ' ' + r.ma);
+    toggle.addEventListener('click', () => {
+      person.saving = true; render();
+      runServer('setHidden', ['PERSON', r.id, !r.da_an, r.sua_luc],
+        () => { person.saving = false; loadPeople(); },
+        (msg) => { person.saving = false; person.error = msg; if (msg === t('err.CONFLICT')) loadPeople(); render(); });
+    });
+    acts.append(edit, toggle);
+    const actCell = cell(9, null); actCell.append(acts);
+    const day = (i, v) => { const td = cell(i, v); td.classList.add('nowrap'); return td; };
+    const statusCell = (p) => {
+      const td = cell(8, t('person.status.' + p.trang_thai_sang_loc));
+      const life = lifecycleOf(p.id);
+      if (life) td.append(el('div', 'muted', t('app.life.' + life)));
+      return td;
+    };
+    tr.append(cell(0, r.ma), name, day(2, r.ngay_sinh), cell(3, lk(r.quoc_tich)), cell(4, lk(r.tu_cach_luu_tru)), day(5, r.han_luu_tru),
+      cell(6, lk(r.tieng_nhat)), cell(7, r.recruiter_staff_id ? staffLabel(r.recruiter_staff_id) : ''),
+      statusCell(r), actCell);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap);
+  return box;
+}
+
+function refreshPersonList() { if (person.listBox) person.listBox.replaceChildren(personListEl()); }
+
+function personFilter(key, label, options) {
+  const sel = el('select');
+  sel.setAttribute('aria-label', t(label));
+  [['', t(label) + ': ' + t('company.all')]].concat(options).forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; sel.append(op); });
+  sel.value = person[key];
+  sel.addEventListener('change', () => { person[key] = sel.value; refreshPersonList(); });
+  return sel;
+}
+
+function renderPersonPage() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  if (person.detailId) { person.listBox = null; body.append(renderPersonDetail()); return; }
+  const root = el('div', 'stack');
+  const bar = el('div', 'toolbar');
+  const filters = el('div', 'filters');
+  const search = el('input'); search.type = 'search'; search.value = person.q;
+  search.placeholder = t('person.search'); search.setAttribute('aria-label', t('person.search'));
+  search.addEventListener('input', () => { person.q = search.value; refreshPersonList(); });
+  const showLabel = el('label', 'check');
+  const show = el('input'); show.type = 'checkbox'; show.checked = person.showHidden;
+  show.addEventListener('change', () => { person.showHidden = show.checked; refreshPersonList(); });
+  showLabel.append(show, document.createTextNode(t('staff.showHidden')));
+  const nationalities = company.lookup.filter((r) => r.loai === 'quoc_tich').sort((a, b) => (a.ma < b.ma ? -1 : 1)).map((r) => [r.id, lookupName(r)]);
+  filters.append(search,
+    personFilter('fStatus', 'field.trang_thai_sang_loc', CHOICES.screening.map((s) => [s, t('person.status.' + s)])),
+    personFilter('fRecruiter', 'field.recruiter_staff_id', company.staff.map((s) => [s.id, staffLabel(s.id)])),
+    personFilter('fNationality', 'field.quoc_tich', nationalities),
+    showLabel);
+  const add = el('button', 'btn-primary', t('person.add'));
+  add.type = 'button'; add.disabled = person.saving || !!person.form;
+  add.addEventListener('click', () => openPersonForm(null));
+  bar.append(filters, add);
+  root.append(bar);
+  if (person.form) root.append(renderPersonForm());
+  if (person.error) root.append(el('div', 'msg-err', person.error));
+  person.listBox = el('div');
+  person.listBox.append(personListEl());
+  root.append(person.listBox, el('div', 'muted', t('person.note')));
+  body.append(root);
+}
+</script>

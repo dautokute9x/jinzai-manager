@@ -1,0 +1,11 @@
+{
+  "name": "jinzai-manager",
+  "private": true,
+  "description": "HR Tokutei – bản miễn phí chạy trên Google Apps Script + Google Sheets",
+  "scripts": {
+    "test": "for f in tests/*.test.js; do echo \"== $f\"; node \"$f\" || exit 1; done"
+  },
+  "devDependencies": {
+    "jsdom": "29.1.1"
+  }
+}

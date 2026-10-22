@@ -1,0 +1,166 @@
+<script>
+// D-079: đọc file Excel (.xlsx) NGAY TRONG TRÌNH DUYỆT — không gửi file lên đâu, không dùng thư viện ngoài.
+// xlsx = file zip chứa XML: đọc mục lục zip, giải nén (DecompressionStream 'deflate-raw'), đọc XML bằng DOMParser.
+// Trả về [{ name, rows: [[ô dạng chữ]] }]: ô ngày (theo định dạng ô) → "yyyy-MM-dd"; số → chữ; ô gộp (merge) → điền giá trị ô đầu cho cả vùng;
+// chữ phiên âm furigana (rPh) bị bỏ. Dòng trống vẫn giữ (mảng rỗng) để số dòng khớp Excel.
+
+async function xlsxInflate(bytes) {
+  if (typeof DecompressionStream === 'undefined') throw new Error('XLSX_UNSUPPORTED');
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(bytes); writer.close();
+  const reader = ds.readable.getReader();
+  const parts = []; let len = 0;
+  for (;;) { const r = await reader.read(); if (r.done) break; parts.push(r.value); len += r.value.length; }
+  const out = new Uint8Array(len); let p = 0;
+  parts.forEach((x) => { out.set(x, p); p += x.length; });
+  return out;
+}
+
+// Mục lục zip (central directory) → { tên: { method, size, offset } }.
+function xlsxEntries(buf) {
+  const dv = new DataView(buf);
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error('XLSX_BAD');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const dec = new TextDecoder();
+  const out = {};
+  for (let k = 0; k < count; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('XLSX_BAD');
+    const method = dv.getUint16(p + 10, true);
+    const size = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true);
+    const extra = dv.getUint16(p + 30, true);
+    const comment = dv.getUint16(p + 32, true);
+    const offset = dv.getUint32(p + 42, true);
+    const name = dec.decode(new Uint8Array(buf, p + 46, nameLen));
+    out[name] = { method: method, size: size, offset: offset };
+    p += 46 + nameLen + extra + comment;
+  }
+  return out;
+}
+
+async function xlsxText(buf, entries, name) {
+  const e = entries[name] || entries[name.replace(/^\//, '')];
+  if (!e) return null;
+  const dv = new DataView(buf);
+  const start = e.offset + 30 + dv.getUint16(e.offset + 26, true) + dv.getUint16(e.offset + 28, true);
+  const raw = new Uint8Array(buf, start, e.size);
+  const bytes = e.method === 0 ? raw : e.method === 8 ? await xlsxInflate(raw) : null;
+  if (!bytes) throw new Error('XLSX_BAD');
+  return new TextDecoder().decode(bytes).replace(/\r\n?/g, '\n'); // chuẩn XML: xuống dòng CR LF → LF
+}
+
+const xlsxEnt = (s) => s.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g, (m, e) => (e[0] === '#'
+  ? String.fromCodePoint(e[1] === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[e]));
+// Chữ của 1 ô / 1 <si>: ghép mọi <t>, bỏ phần phiên âm <rPh>…</rPh>.
+const xlsxRunText = (xml) => xlsxUnesc(xlsxEnt((xml.replace(/<(?:\w+:)?rPh\b[\s\S]*?<\/(?:\w+:)?rPh>/g, '')
+  .match(/<(?:\w+:)?t(?:\s[^>]*)?>[\s\S]*?<\/(?:\w+:)?t>/g) || []).map((t) => t.replace(/^<[^>]*>|<\/[^>]*>$/g, '')).join('')));
+const xlsxUnesc = (s) => s.replace(/_x([0-9A-Fa-f]{4})_/g, (m, h) => String.fromCharCode(parseInt(h, 16))); // Excel mã hóa ký tự điều khiển, vd. _x000D_
+const xlsxXml = (text) => new DOMParser().parseFromString(text, 'application/xml');
+const xlsxAll = (node, tag) => Array.from(node.getElementsByTagNameNS('*', tag));
+const xlsxKids = (node, tag) => Array.from(node.childNodes).filter((n) => n.nodeType === 1 && n.localName === tag);
+
+// "AB12" → [11 (dòng, từ 0), 27 (cột, từ 0)]
+function xlsxRef(ref) {
+  const m = /^([A-Z]+)(\d+)$/.exec(ref || '');
+  if (!m) return null;
+  let c = 0;
+  for (let i = 0; i < m[1].length; i++) c = c * 26 + (m[1].charCodeAt(i) - 64);
+  return [Number(m[2]) - 1, c - 1];
+}
+
+// Định dạng ô là ngày? Mã có sẵn của Excel (cả bộ tiếng Nhật 27–36, 50–58) hoặc định dạng tự đặt có y / m / d (bỏ phần trong "" và []).
+function xlsxDateFmt(id, code) {
+  if ((id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 45 && id <= 47) || (id >= 50 && id <= 58)) return true;
+  if (!code) return false;
+  const s = code.replace(/"[^"]*"|\[[^\]]*\]|\\./g, '');
+  return /[ymd]|[年月日]/i.test(s) && !/^[#0.,%\s]*$/.test(s);
+}
+
+function xlsxSerialDate(n, base1904) {
+  const ms = Date.UTC(base1904 ? 1904 : 1899, base1904 ? 0 : 11, base1904 ? 1 : 30) + Math.round(n * 86400) * 1000;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+async function readXlsx(arrayBuffer) {
+  const buf = arrayBuffer;
+  const entries = xlsxEntries(buf);
+  const wb = xlsxXml(await xlsxText(buf, entries, 'xl/workbook.xml') || '');
+  const rels = xlsxXml(await xlsxText(buf, entries, 'xl/_rels/workbook.xml.rels') || '<r/>');
+  const target = {};
+  xlsxAll(rels, 'Relationship').forEach((r) => { target[r.getAttribute('Id')] = r.getAttribute('Target'); });
+  const pr = xlsxAll(wb, 'workbookPr')[0];
+  const base1904 = !!pr && /^(1|true)$/.test(pr.getAttribute('date1904') || '');
+  // Chuỗi dùng chung: ghép các <t> trong <si> (kể cả <r>), bỏ phiên âm <rPh>. Đọc bằng regex cho nhanh (file lớn).
+  const sstText = await xlsxText(buf, entries, 'xl/sharedStrings.xml');
+  const shared = sstText ? (sstText.match(/<(?:\w+:)?si\b[\s\S]*?<\/(?:\w+:)?si>/g) || []).map(xlsxRunText) : [];
+  const stylesText = await xlsxText(buf, entries, 'xl/styles.xml');
+  let dateStyle = [];
+  if (stylesText) {
+    const st = xlsxXml(stylesText);
+    const codes = {};
+    xlsxAll(st, 'numFmt').forEach((f) => { codes[f.getAttribute('numFmtId')] = f.getAttribute('formatCode'); });
+    const xfs = xlsxAll(st, 'cellXfs')[0];
+    dateStyle = xfs ? xlsxKids(xfs, 'xf').map((x) => { const id = Number(x.getAttribute('numFmtId') || 0); return xlsxDateFmt(id, codes[id]); }) : [];
+  }
+  const sheets = [];
+  for (const s of xlsxAll(wb, 'sheet')) {
+    const rid = s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id') || s.getAttribute('r:id');
+    let path = target[rid] || '';
+    path = path.indexOf('/') === 0 ? path.slice(1) : 'xl/' + path.replace(/^\.\//, '');
+    const text = await xlsxText(buf, entries, path);
+    if (!text) continue;
+    // Sheet có thể rất lớn (vài MB vì ô trống có định dạng) → quét bằng regex thay vì dựng cây DOM.
+    const rows = [];
+    const cellRe = /<(?:\w+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g;
+    let m;
+    while ((m = cellRe.exec(text))) {
+      if (!m[2]) continue; // ô trống (chỉ có định dạng)
+      const attr = (k) => { const x = new RegExp('\\b' + k + '="([^"]*)"').exec(m[1]); return x ? x[1] : ''; };
+      const pos = xlsxRef(attr('r'));
+      if (!pos) continue;
+      const type = attr('t') || 'n';
+      const vm = /<(?:\w+:)?v>([\s\S]*?)<\/(?:\w+:)?v>/.exec(m[2]);
+      const v = vm ? xlsxEnt(vm[1]) : undefined;
+      let out = '';
+      if (type === 's') out = shared[Number(v)] || '';
+      else if (type === 'inlineStr') out = xlsxRunText(m[2]);
+      else if (type === 'b') out = v === '1' ? 'TRUE' : 'FALSE';
+      else if (type === 'e') out = '';
+      else if (type === 'str' || type === 'd') out = v || '';
+      else if (v !== undefined && v !== '') {
+        const n = Number(v);
+        out = dateStyle[Number(attr('s') || 0)] && isFinite(n) ? xlsxSerialDate(n, base1904) : String(n);
+      }
+      if (out === '') continue;
+      (rows[pos[0]] = rows[pos[0]] || [])[pos[1]] = out;
+    }
+    (text.match(/<(?:\w+:)?mergeCell\b[^>]*ref="[^"]+"/g) || []).forEach((mc) => {
+      const ab = /ref="([^"]+)"/.exec(mc)[1].split(':').map(xlsxRef);
+      if (!ab[0] || !ab[1]) return;
+      const v = (rows[ab[0][0]] || [])[ab[0][1]];
+      if (v === undefined) return;
+      for (let r = ab[0][0]; r <= ab[1][0]; r++) for (let k = ab[0][1]; k <= ab[1][1]; k++) (rows[r] = rows[r] || [])[k] = v;
+    });
+    for (let i = 0; i < rows.length; i++) rows[i] = Array.from(rows[i] || [], (x) => (x === undefined ? '' : x));
+    sheets.push({ name: s.getAttribute('name') || '', rows: rows });
+  }
+  return sheets;
+}
+
+// Đọc file người dùng chọn: .xlsx → các sheet; .csv → 1 sheet (dùng parseCsv của ImportUi).
+// Gọi lại onOk(sheets) / onErr(lỗi) (CSV: gọi ngay khi đọc xong).
+function readTableFile(file, onOk, onErr) {
+  const reader = new FileReader();
+  const isXlsx = /\.xlsx$/i.test(file.name);
+  reader.onerror = () => onErr(new Error('XLSX_BAD'));
+  reader.onload = () => {
+    if (!isXlsx) { onOk([{ name: file.name, rows: parseCsv(reader.result) }]); return; }
+    readXlsx(reader.result).then(onOk, onErr);
+  };
+  if (isXlsx) reader.readAsArrayBuffer(file); else reader.readAsText(file, 'utf-8');
+}
+</script>

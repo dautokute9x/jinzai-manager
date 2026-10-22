@@ -1,0 +1,269 @@
+<script>
+// GĐ 5 (D-069): mục "Hợp đồng & phí" trong chi tiết công ty + Cài đặt → Tài chính & hóa đơn. Hàm tiền / chia doanh số dùng chung.
+// Dùng t(), fmt(), el(), render(), runServer() của Index.html; company, companyInput(), validationField(), todayJst() của Company.html; byMa của Jobs.html.
+const CONTRACT_FIELDS = ['tu_ngay', 'den_ngay', 'phi_gioi_thieu', 'chia_coc', 'phi_ho_tro', 'bac_hoan', 'ghi_chu'];
+let ct = { form: null, fieldErr: null, saving: false, error: null };
+let fin = { data: null, edit: null, saving: false, error: null, fieldErr: null, saved: false };
+
+const yen = (n) => (Number(n) < 0 ? '−' : '') + '¥' + Math.abs(Math.round(Number(n || 0))).toLocaleString('ja-JP');
+
+function staffName(id) {
+  const s = (company.staff || []).find((x) => x.id === id);
+  return s ? s.ho_ten : id;
+}
+
+// "id:60,id:40" → "Tên 60% · Tên 40%".
+function splitText(chia) {
+  if (!chia) return '—';
+  return chia.split(',').map((p) => { const a = p.split(':'); return staffName(a[0]) + ' ' + a[1] + '%'; }).join(' · ');
+}
+
+// Ô sửa chia doanh số: các dòng [người][%]; holder.chia luôn là chuỗi "id:%,…" (trống = không chia cá nhân).
+function splitEditor(holder, label) {
+  const rows = holder.chia ? holder.chia.split(',').map((p) => { const a = p.split(':'); return { id: a[0], pct: a[1] }; }) : [];
+  const box = el('fieldset', 'field wide split-edit');
+  box.append(el('legend', null, label || t('field.chia')));
+  const sync = () => { holder.chia = rows.filter((r) => r.id && r.pct !== '').map((r) => r.id + ':' + r.pct).join(','); };
+  const list = el('div', 'stack tight');
+  const draw = () => {
+    list.replaceChildren();
+    rows.forEach((r, i) => {
+      const line = el('div', 'filters');
+      const sel = el('select', 'cell-input');
+      sel.setAttribute('aria-label', t('sales.staff') + ' ' + (i + 1));
+      [['', '—']].concat(staffOptions([r.id]).map((o) => [o.id, o.text + (o.tag ? ' (' + o.tag + ')' : '')]))
+        .forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; sel.append(op); });
+      sel.value = r.id;
+      sel.addEventListener('change', () => { r.id = sel.value; sync(); });
+      const pct = el('input', 'num-input'); pct.type = 'number'; pct.min = '1'; pct.max = '100'; pct.value = r.pct;
+      pct.setAttribute('aria-label', '% ' + (i + 1));
+      pct.addEventListener('input', () => { r.pct = pct.value; sync(); });
+      const rm = el('button', 'btn small', '×'); rm.type = 'button'; rm.setAttribute('aria-label', t('fin.splitRemove') + ' ' + (i + 1));
+      rm.addEventListener('click', () => { rows.splice(i, 1); sync(); draw(); });
+      line.append(sel, pct, el('span', 'muted', '%'), rm);
+      list.append(line);
+    });
+    const add = el('button', 'btn small', t('fin.splitAdd')); add.type = 'button';
+    add.addEventListener('click', () => { rows.push({ id: '', pct: String(Math.max(0, 100 - rows.reduce((s, r) => s + Number(r.pct || 0), 0))) }); sync(); draw(); });
+    list.append(add, el('div', 'muted', t('fin.splitHint')));
+  };
+  draw();
+  box.append(list);
+  return box;
+}
+
+// ---- Hợp đồng & phí trong chi tiết công ty ----
+function reloadContracts() {
+  runServer('listRecords', ['CONTRACT'], (rows) => { company.contracts = rows; render(); }, (msg) => { ct.error = msg; render(); });
+}
+
+function openContractForm(row, companyId) {
+  const data = {};
+  CONTRACT_FIELDS.forEach((k) => { data[k] = row ? row[k] || '' : ''; });
+  if (!row) Object.assign(data, { tu_ngay: todayJst(), phi_ho_tro: '0' });
+  ct.form = { id: row ? row.id : null, ma: row ? row.ma : '', sua_luc: row ? row.sua_luc : '', companyId: companyId, data: data };
+  ct.fieldErr = null; ct.error = null;
+  render();
+}
+
+function saveContract(fn, args, closeForm) {
+  ct.saving = true; ct.error = null; ct.fieldErr = null; render();
+  runServer(fn, args,
+    () => { ct.saving = false; if (closeForm) ct.form = null; reloadContracts(); },
+    (msg, raw) => {
+      ct.saving = false;
+      const field = validationField(raw);
+      if (field && ct.form) ct.fieldErr = { field: field, msg: msg }; else ct.error = msg;
+      if (msg === t('err.CONFLICT')) { ct.form = null; reloadContracts(); }
+      render();
+    });
+}
+
+function renderContractForm() {
+  const f = ct.form;
+  const fe = ct.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.setAttribute('aria-labelledby', 'ct-form-h');
+  const h = el('h3', null, f.id ? fmt('fin.ctEdit', { ma: f.ma }) : t('fin.ctNew')); h.id = 'ct-form-h';
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (f.id) saveContract('updateRecord', ['CONTRACT', f.id, f.data, f.sua_luc], true);
+    else saveContract('createRecord', ['CONTRACT', Object.assign({ company_id: f.companyId }, f.data)], true);
+  });
+  const tiers = companyInput(f, 'bac_hoan', { fe: fe, placeholder: '30:100, 90:50' });
+  tiers.append(el('span', 'muted', t('fin.tiersHint')));
+  form.append(
+    companyInput(f, 'tu_ngay', { required: true, type: 'date', fe: fe }),
+    companyInput(f, 'den_ngay', { type: 'date', fe: fe }),
+    companyInput(f, 'phi_gioi_thieu', { required: true, type: 'number', fe: fe }),
+    companyInput(f, 'chia_coc', { fe: fe, options: [['', t('fin.coc.no')], ['Y', t('fin.coc.yes')]] }),
+    companyInput(f, 'phi_ho_tro', { type: 'number', fe: fe }),
+    tiers,
+    companyInput(f, 'ghi_chu', { textarea: true, max: 1000, wide: true, fe: fe }));
+  form.querySelectorAll('input[type="number"]').forEach((i) => { i.min = '0'; i.step = '1'; i.inputMode = 'numeric'; });
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', ct.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = ct.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.addEventListener('click', () => { ct.form = null; ct.fieldErr = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(h, el('div', 'muted', t('fin.ctNote')), form);
+  return wrap;
+}
+
+function renderContracts(co) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'ct-h');
+  const bar = el('div', 'toolbar');
+  const h = el('h2', null, t('fin.ctTitle')); h.id = 'ct-h';
+  const add = el('button', 'btn-primary', t('fin.ctAdd'));
+  add.type = 'button'; add.disabled = ct.saving || !!ct.form;
+  add.addEventListener('click', () => openContractForm(null, co.id));
+  bar.append(h, add);
+  box.append(bar);
+  if (ct.form && ct.form.companyId === co.id) box.append(renderContractForm());
+  if (ct.error) box.append(el('div', 'msg-err', ct.error));
+  const today = todayJst();
+  const list = (company.contracts || []).filter((c) => c.company_id === co.id && !c.da_an).sort((a, b) => (a.tu_ngay < b.tu_ngay ? 1 : -1));
+  if (!list.length) { box.append(el('div', 'muted', t('fin.ctEmpty'))); return box; }
+  const current = list.find((c) => c.tu_ngay <= today && (!c.den_ngay || today <= c.den_ngay));
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards many');
+  const cols = ['staff.col.ma', 'fin.col.period', 'field.phi_gioi_thieu', 'field.chia_coc', 'field.phi_ho_tro', 'field.bac_hoan', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+  list.forEach((c) => {
+    const period = cell(1, c.tu_ngay + ' → ' + (c.den_ngay || '…'));
+    if (c === current) period.append(el('div', 'badge', t('fin.ctCurrent')));
+    const tiers = cell(5, c.bac_hoan ? c.bac_hoan.split(',').map((p) => { const a = p.split(':'); return fmt('fin.tier', { d: a[0].trim(), p: a[1].trim() }); }).join(' · ') : '—');
+    const acts = el('div', 'row-actions');
+    const edit = el('button', 'btn', t('staff.edit'));
+    edit.type = 'button'; edit.disabled = ct.saving || !!ct.form;
+    edit.setAttribute('aria-label', t('staff.edit') + ' ' + c.ma);
+    edit.addEventListener('click', () => openContractForm(c, co.id));
+    const hide = el('button', 'btn', t('staff.hide'));
+    hide.type = 'button'; hide.disabled = ct.saving;
+    hide.setAttribute('aria-label', t('staff.hide') + ' ' + c.ma);
+    hide.addEventListener('click', () => saveContract('setHidden', ['CONTRACT', c.id, true, c.sua_luc], false));
+    acts.append(edit, hide);
+    const actCell = cell(6, null); actCell.append(acts);
+    const tr = el('tr');
+    tr.append(cell(0, c.ma), period, cell(2, yen(c.phi_gioi_thieu)), cell(3, c.chia_coc === 'Y' ? t('fin.coc.yes') : t('fin.coc.no')),
+      cell(4, Number(c.phi_ho_tro) ? fmt('fin.perMonth', { v: yen(c.phi_ho_tro) }) : '—'), tiers, actCell);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap, el('div', 'muted', t('fin.ctFoot')));
+  return box;
+}
+
+// ---- D-077: Cài đặt → Phân quyền (chỉ chủ) ----
+let perm = { data: null, edit: null, saving: false, error: null, saved: false };
+const PERM_KEYS = ['so_giay_to', 'doanh_so_minh', 'doanh_so', 'hoa_don', 'hop_dong', 'cai_dat', 'nhap_xuat'];
+
+function loadPermissions() {
+  runServer('getPermissions', [], (res) => { perm.data = res; perm.edit = JSON.parse(JSON.stringify(res.matrix || {})); render(); }, (msg) => { perm.error = msg; render(); });
+}
+
+function renderPermissions() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'perm-h');
+  const h = el('h2', null, t('perm.title')); h.id = 'perm-h';
+  box.append(h, el('div', 'muted', t('perm.desc')));
+  if (perm.error) box.append(el('div', 'msg-err', perm.error));
+  if (!perm.data || !perm.edit) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['perm.col.what', 'role.nhan_vien', 'role.quan_ly'];
+  const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  PERM_KEYS.forEach((p) => {
+    const tr = el('tr');
+    const what = el('td'); what.dataset.label = t(cols[0]);
+    what.append(el('strong', null, t('perm.' + p)), el('div', 'muted', t('perm.' + p + '.desc')));
+    tr.append(what);
+    ['nhan_vien', 'quan_ly'].forEach((r, i) => {
+      const td = el('td'); td.dataset.label = t(cols[i + 1]);
+      const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!perm.edit[r][p];
+      cb.setAttribute('aria-label', t('role.' + r) + ' — ' + t('perm.' + p));
+      cb.addEventListener('change', () => { perm.edit[r][p] = cb.checked; perm.saved = false; });
+      td.append(cb);
+      tr.append(td);
+    });
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap);
+  const save = el('button', 'btn-primary', perm.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'button'; save.disabled = perm.saving;
+  save.addEventListener('click', () => {
+    perm.saving = true; perm.error = null; render();
+    runServer('savePermissions', [perm.edit, perm.data.sua_luc],
+      (res) => { perm.saving = false; perm.saved = true; perm.data = res; perm.edit = JSON.parse(JSON.stringify(res.matrix)); render(); },
+      (msg) => { perm.saving = false; perm.error = msg; if (msg === t('err.CONFLICT')) loadPermissions(); render(); });
+  });
+  box.append(save, el('div', 'muted', t('perm.note')));
+  if (perm.saved) box.append(el('div', 'msg-ok', t('perm.saved')));
+  return box;
+}
+
+// ---- Cài đặt → Tài chính & hóa đơn ----
+const FIN_FIELDS = ['tax', 'split_recruiter', 'referrer_amount', 'due_days', 'issuer_name', 'issuer_tno', 'issuer_address', 'bank'];
+
+function loadFinance() {
+  runServer('getFinanceSettings', [], (res) => { fin.data = res; fin.edit = null; render(); }, (msg) => { fin.error = msg; render(); });
+}
+
+function renderFinanceSettings() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'fin-h');
+  const h = el('h2', null, t('fin.setTitle')); h.id = 'fin-h';
+  box.append(h, el('div', 'muted', t('fin.setDesc')));
+  if (fin.error) box.append(el('div', 'msg-err', fin.error));
+  if (!fin.data) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  if (!fin.edit) { fin.edit = { data: {} }; FIN_FIELDS.forEach((k) => { fin.edit.data[k] = String(fin.data[k] === undefined ? '' : fin.data[k]); }); }
+  const f = fin.edit;
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    fin.saving = true; fin.error = null; fin.fieldErr = null; fin.saved = false; render();
+    runServer('saveFinanceSettings', [f.data, fin.data.sua_luc],
+      (res) => { fin.saving = false; fin.saved = true; fin.data = res; fin.edit = null; render(); },
+      (msg, raw) => {
+        fin.saving = false;
+        const field = validationField(raw);
+        if (field) fin.fieldErr = { field: field, msg: msg }; else fin.error = msg;
+        if (msg === t('err.CONFLICT')) loadFinance();
+        render();
+      });
+  });
+  const fe = fin.fieldErr;
+  form.append(
+    companyInput(f, 'tax', { type: 'number', fe: fe }),
+    companyInput(f, 'split_recruiter', { type: 'number', fe: fe }),
+    companyInput(f, 'referrer_amount', { type: 'number', fe: fe }),
+    companyInput(f, 'due_days', { type: 'number', fe: fe }),
+    companyInput(f, 'issuer_name', { max: 100, fe: fe }),
+    companyInput(f, 'issuer_tno', { max: 14, fe: fe, placeholder: 'T1234567890123' }),
+    companyInput(f, 'issuer_address', { max: 300, wide: true, fe: fe }),
+    companyInput(f, 'bank', { textarea: true, max: 300, wide: true, fe: fe }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', fin.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = fin.saving;
+  actions.append(save);
+  form.append(actions);
+  box.append(form);
+  if (fin.saved) box.append(el('div', 'msg-ok', t('fin.setSaved')));
+  return box;
+}
+</script>

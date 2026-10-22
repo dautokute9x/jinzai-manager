@@ -1,0 +1,123 @@
+<script>
+// Bước 1.6: khu "Đo tốc độ" trong trang Cài đặt (D-041).
+// Mỗi thao tác gọi máy chủ riêng để đo cả thời gian người dùng thật sự chờ.
+const PERF_OPS = [
+  { op: 'list', limit: 'list' },
+  { op: 'listApplication', limit: 'list' },
+  { op: 'create', limit: 'save' },
+  { op: 'update', limit: 'save' },
+  { op: 'hide', limit: 'save' },
+];
+const PERF_ROUNDS = 5; // 1.6c-F: đo mỗi thao tác 5 lần để bớt sai số do máy chủ Google dao động
+const PERF_PARTS = ['khoa', 'kiemTraFile', 'moFile', 'doc', 'ghi', 'nhatKy', 'khac'];
+let perf = { busy: false, status: '', prep: null, results: [], error: null };
+
+// Lần đứng giữa khi xếp từ nhanh đến chậm (số lần chẵn thì lấy lần nhanh hơn trong 2 lần giữa).
+function perfMedian(values) { const s = values.slice().sort((a, b) => a - b); return s[(s.length - 1) >> 1]; }
+
+function perfRecord(op, limitMs, run) {
+  let row = perf.results.find((r) => r.op === op);
+  if (!row) { row = { op: op, limitMs: limitMs, runs: [] }; perf.results.push(row); }
+  row.limitMs = limitMs;
+  row.runs.push(run);
+}
+
+function perfFail(msg) { perf.busy = false; perf.status = ''; perf.error = msg; render(); }
+
+// Mỗi vòng: danh sách, đọc, tạo 1 bản ghi rồi sửa và ẩn chính bản ghi đó.
+function runPerfOp(round, i, arg) {
+  if (i >= PERF_OPS.length) { round++; i = 0; arg = null; }
+  if (round >= PERF_ROUNDS) { perf.busy = false; perf.status = ''; render(); return; }
+  const step = PERF_OPS[i];
+  perf.status = fmt('perf.measuring', { op: t('perf.op.' + step.op), n: round + 1, total: PERF_ROUNDS }); render();
+  const t0 = performance.now();
+  runServer('perfOp', [step.op, arg], (res) => {
+    const totalMs = Math.round(performance.now() - t0);
+    perfRecord(step.op, res.thresholds[step.limit], { serverMs: res.serverMs, totalMs: totalMs, parts: res.parts || {} });
+    runPerfOp(round, i + 1, res.result && res.result.id ? res.result : arg);
+  }, perfFail);
+}
+
+function startPerf() {
+  perf = { busy: true, status: t('perf.preparing'), prep: null, results: [], error: null };
+  render();
+  runServer('preparePerfData', [], (prep) => {
+    perf.prep = prep;
+    perfRecord('appLoad', 5000, { serverMs: null, totalMs: appLoadMs, parts: {} });
+    runPerfOp(0, 0, null);
+  }, perfFail);
+}
+
+function renderPerf() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'perf-h');
+  const h = el('h2', null, t('perf.title')); h.id = 'perf-h';
+  box.append(h, el('div', 'muted', t('perf.desc')));
+  const btn = el('button', 'btn-primary', perf.busy ? t('setup.running') : t('perf.run'));
+  btn.type = 'button'; btn.disabled = perf.busy; btn.addEventListener('click', startPerf);
+  box.append(btn);
+  if (perf.status) box.append(el('div', 'muted', perf.status));
+  if (perf.error) box.append(el('div', 'msg-err', perf.error));
+  if (perf.prep) {
+    const counts = Object.keys(perf.prep.counts).map((k) => k + ' ' + perf.prep.counts[k]).join(', ');
+    box.append(el('div', 'muted', fmt('perf.prepared', { counts: counts, s: (perf.prep.ms / 1000).toFixed(1) })));
+    const link = el('a', null, t('perf.openFile'));
+    link.href = perf.prep.url; link.target = '_blank'; link.rel = 'noopener';
+    box.append(link);
+  }
+  if (perf.results.length) {
+    const sec = (ms) => (ms == null ? '—' : (ms / 1000).toFixed(2));
+    const wrap = el('div', 'table-wrap');
+    const table = el('table');
+    const head = el('tr');
+    ['perf.col.op', 'perf.col.server', 'perf.col.total', 'perf.col.max', 'perf.col.limit', 'perf.col.result', 'perf.col.resultMax']
+      .forEach((k) => head.append(el('th', null, t(k))));
+    const thead = el('thead'); thead.append(head);
+    const tbody = el('tbody');
+    const verdict = (ms, limit) => el('td', ms <= limit ? 'msg-ok' : 'msg-err', t(ms <= limit ? 'perf.pass' : 'perf.fail'));
+    perf.results.forEach((r) => {
+      const totals = r.runs.map((x) => x.totalMs);
+      const servers = r.runs.map((x) => x.serverMs).filter((x) => x != null);
+      const mid = perfMedian(totals);
+      const max = Math.max.apply(null, totals);
+      const opCell = el('td', null, t('perf.op.' + r.op));
+      // Thời gian máy chủ chia theo từng việc (lấy lần giữa của từng việc).
+      const parts = PERF_PARTS.filter((p) => r.runs.some((x) => p in x.parts))
+        .map((p) => t('perf.part.' + p) + ' ' + sec(perfMedian(r.runs.map((x) => x.parts[p] || 0))));
+      if (parts.length) opCell.append(el('div', 'muted', parts.join(' · ')));
+      const tr = el('tr');
+      tr.append(opCell, el('td', null, servers.length ? sec(perfMedian(servers)) : '—'), el('td', null, sec(mid)), el('td', null, sec(max)),
+        el('td', null, '≤ ' + sec(r.limitMs)), verdict(mid, r.limitMs), verdict(max, r.limitMs));
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    box.append(wrap, el('div', 'muted', t('perf.note')));
+  }
+  return box;
+}
+
+// Tạo dữ liệu mẫu (Demo.gs): gọi lặp tới khi máy chủ báo xong (mỗi lần tối đa ~4,5 phút).
+let demo = { busy: false, status: '', done: false, error: null };
+function demoStep() {
+  runServer('seedDemoData', [], (res) => {
+    if (res.done) { demo = { busy: false, status: '', done: true, error: null }; render(); loadStatus(); loadDashboard(); return; }
+    demo.status = fmt('demo.progress', { i: res.i, total: res.total }); render();
+    demoStep();
+  }, (msg) => { demo.busy = false; demo.status = ''; demo.error = msg; render(); });
+}
+function runDemo() { demo = { busy: true, status: t('demo.starting'), done: false, error: null }; render(); demoStep(); }
+function renderDemo() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'demo-h');
+  const h = el('h2', null, t('demo.title')); h.id = 'demo-h';
+  box.append(h, el('div', 'muted', t('demo.desc')));
+  const btn = el('button', 'btn-primary', demo.busy ? t('setup.running') : t('demo.run'));
+  btn.type = 'button'; btn.disabled = demo.busy || demo.done; btn.addEventListener('click', runDemo);
+  box.append(btn);
+  if (demo.status) box.append(el('div', 'muted', demo.status));
+  if (demo.done) box.append(el('div', 'msg-ok', t('demo.done')));
+  if (demo.error) box.append(el('div', 'msg-err', demo.error));
+  return box;
+}
+</script>

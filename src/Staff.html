@@ -1,0 +1,170 @@
+<script>
+// Bước 1.4: danh sách nhân viên phụ trách trong trang Cài đặt (D-038, D-039).
+// Dùng t(), fmt(), el(), render(), runServer() của Index.html.
+let staff = { rows: [], loading: false, saving: false, showHidden: false, form: null, error: null, link: null };
+
+function loadStaff() {
+  staff.loading = true;
+  runServer('listRecords', ['STAFF'],
+    (rows) => { staff.loading = false; staff.rows = rows; render(); },
+    (msg) => { staff.loading = false; staff.error = msg; render(); });
+}
+
+// Mọi thao tác ghi: xong thì tải lại danh sách để thấy đúng dữ liệu trên Sheets.
+function saveStaff(fn, args, closeForm) {
+  staff.saving = true; staff.error = null; render();
+  runServer(fn, args,
+    () => { staff.saving = false; if (closeForm) staff.form = null; loadStaff(); },
+    (msg) => {
+      staff.saving = false; staff.error = msg;
+      if (msg === t('err.CONFLICT')) { staff.form = null; loadStaff(); }
+      render();
+    });
+}
+
+function submitStaffForm() {
+  const f = staff.form;
+  const data = { ho_ten: f.ho_ten, trang_thai: f.trang_thai };
+  if (f.id) saveStaff('updateRecord', ['STAFF', f.id, data, f.sua_luc], true);
+  else saveStaff('createRecord', ['STAFF', data], true);
+}
+
+function renderStaffForm() {
+  const f = staff.form;
+  const form = el('form', 'form');
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitStaffForm(); });
+
+  const nameLabel = el('label', 'field', t('field.ho_ten'));
+  const name = el('input');
+  name.value = f.ho_ten; name.maxLength = 100; name.autocomplete = 'off';
+  name.addEventListener('input', () => { f.ho_ten = name.value; });
+  nameLabel.append(name);
+
+  const statusLabel = el('label', 'field', t('field.trang_thai'));
+  const status = el('select');
+  ['dang_lam', 'da_nghi'].forEach((v) => { const o = el('option', null, t('staff.status.' + v)); o.value = v; status.append(o); });
+  status.value = f.trang_thai;
+  status.addEventListener('change', () => { f.trang_thai = status.value; });
+  statusLabel.append(status);
+
+  const actions = el('div', 'form-actions');
+  const save = el('button', 'btn-primary', staff.saving ? t('setup.running') : t('staff.save'));
+  save.type = 'submit'; save.disabled = staff.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.addEventListener('click', () => { staff.form = null; staff.error = null; render(); });
+  actions.append(save, cancel);
+
+  form.append(nameLabel, statusLabel, actions);
+  setTimeout(() => name.focus(), 0);
+  return form;
+}
+
+// GĐ 10 (D-075): vai trò + liên kết truy cập riêng (chỉ chủ thấy). Liên kết chỉ hiện MỘT lần ngay sau khi tạo.
+function roleCell(r) {
+  const td = el('td');
+  const sel = el('select', 'cell-input');
+  sel.setAttribute('aria-label', t('field.vai_tro') + ' ' + r.ho_ten);
+  ['nhan_vien', 'quan_ly'].forEach((v) => { const o = el('option', null, t('role.' + v)); o.value = v; sel.append(o); });
+  sel.value = r.vai_tro || 'nhan_vien';
+  sel.disabled = staff.saving;
+  sel.addEventListener('change', () => saveStaff('updateRecord', ['STAFF', r.id, { vai_tro: sel.value }, r.sua_luc], false));
+  td.append(sel);
+  return td;
+}
+
+function accessCell(r) {
+  const td = el('td');
+  const box = el('div', 'row-actions');
+  td.append(el('div', 'muted', r.khoa_luc ? fmt('acc.since', { d: r.khoa_luc.slice(0, 16) }) : t('acc.none')));
+  if (r.trang_thai === 'dang_lam' && !r.da_an) {
+    const make = el('button', 'btn small', r.khoa_luc ? t('acc.renew') : t('acc.make'));
+    make.type = 'button'; make.disabled = staff.saving;
+    make.setAttribute('aria-label', make.textContent + ' ' + r.ho_ten);
+    make.addEventListener('click', () => {
+      staff.saving = true; staff.error = null; render();
+      runServer('issueAccessLink', [r.id], (res) => { staff.saving = false; staff.link = { name: r.ho_ten, url: res.url || ('?k=' + res.token) }; loadStaff(); },
+        (msg) => { staff.saving = false; staff.error = msg; render(); });
+    });
+    box.append(make);
+  }
+  if (r.khoa_luc) {
+    const off = el('button', 'btn small', t('acc.revoke'));
+    off.type = 'button'; off.disabled = staff.saving;
+    off.setAttribute('aria-label', t('acc.revoke') + ' ' + r.ho_ten);
+    off.addEventListener('click', () => saveStaff('revokeAccess', [r.id], false));
+    box.append(off);
+  }
+  td.append(box);
+  return td;
+}
+
+function renderStaff() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'staff-h');
+  const h = el('h2', null, t('staff.title')); h.id = 'staff-h';
+  box.append(h);
+
+  const bar = el('div', 'toolbar');
+  const showLabel = el('label', null);
+  showLabel.style.display = 'flex'; showLabel.style.gap = '8px'; showLabel.style.alignItems = 'center';
+  const show = el('input'); show.type = 'checkbox'; show.checked = staff.showHidden;
+  show.addEventListener('change', () => { staff.showHidden = show.checked; render(); });
+  showLabel.append(show, document.createTextNode(t('staff.showHidden')));
+  const add = el('button', 'btn-primary', t('staff.add'));
+  add.type = 'button'; add.disabled = staff.saving;
+  add.addEventListener('click', () => { staff.form = { id: null, ho_ten: '', trang_thai: 'dang_lam' }; staff.error = null; render(); });
+  bar.append(showLabel, add);
+  box.append(bar);
+
+  if (staff.form) box.append(renderStaffForm());
+  if (staff.error) box.append(el('div', 'msg-err', staff.error));
+  if (staff.link) {
+    const lk = el('div', 'msg-warn stack tight');
+    lk.append(el('strong', null, fmt('acc.newLink', { name: staff.link.name })));
+    const inp = el('input', 'cell-input'); inp.readOnly = true; inp.value = staff.link.url; inp.style.maxWidth = '100%';
+    inp.setAttribute('aria-label', t('acc.linkLabel'));
+    inp.addEventListener('focus', () => inp.select());
+    const ok = el('button', 'btn small', t('acc.copied')); ok.type = 'button';
+    ok.addEventListener('click', () => { staff.link = null; render(); });
+    lk.append(inp, el('div', null, t('acc.linkNote')), ok);
+    box.append(lk);
+  }
+
+  const rows = staff.rows.filter((r) => staff.showHidden || !r.da_an);
+  if (staff.loading && !staff.rows.length) box.append(el('div', 'muted', t('setup.loading')));
+  else if (!rows.length) box.append(el('div', 'muted', t('staff.empty')));
+  else {
+    const wrap = el('div', 'table-wrap');
+    const table = el('table');
+    const head = el('tr');
+    ['staff.col.ma', 'field.ho_ten', 'field.trang_thai'].concat(isOwnerUi ? ['field.vai_tro', 'acc.col'] : []).concat(['staff.col.actions'])
+      .forEach((k) => head.append(el('th', null, t(k))));
+    const thead = el('thead'); thead.append(head);
+    const tbody = el('tbody');
+    rows.forEach((r) => {
+      const tr = el('tr', r.da_an ? 'hidden-row' : null);
+      const nameCell = el('td', null, r.ho_ten);
+      if (r.da_an) nameCell.append(el('span', 'muted', ' (' + t('staff.hiddenTag') + ')'));
+      const acts = el('div', 'row-actions');
+      const edit = el('button', 'btn', t('staff.edit'));
+      edit.type = 'button'; edit.disabled = staff.saving;
+      edit.addEventListener('click', () => { staff.form = { id: r.id, ho_ten: r.ho_ten, trang_thai: r.trang_thai, sua_luc: r.sua_luc }; staff.error = null; render(); });
+      const toggle = el('button', 'btn', r.da_an ? t('staff.unhide') : t('staff.hide'));
+      toggle.type = 'button'; toggle.disabled = staff.saving;
+      toggle.addEventListener('click', () => saveStaff('setHidden', ['STAFF', r.id, !r.da_an, r.sua_luc], false));
+      acts.append(edit, toggle);
+      const actCell = el('td'); actCell.append(acts);
+      tr.append(el('td', null, r.ma), nameCell, el('td', null, t('staff.status.' + r.trang_thai)));
+      if (isOwnerUi) tr.append(roleCell(r), accessCell(r));
+      tr.append(actCell);
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    box.append(wrap);
+  }
+  box.append(el('div', 'muted', t('staff.auditNote')));
+  if (isOwnerUi) box.append(el('div', 'muted', t('acc.note')));
+  return box;
+}
+</script>

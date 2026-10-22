@@ -1,0 +1,362 @@
+<script>
+// GĐ 11.2 (D-080): trang 受入れ前 (chuẩn bị tiếp nhận) — danh sách + tiến độ, chi tiết (công việc chuẩn bị, giấy tờ, visa), xác nhận vào làm;
+// mục trong hồ sơ người; Cài đặt → mẫu công việc theo loại. Dùng hàm chung của Index / Company / PersonUi / DocsUi.
+let prep = { data: null, loading: 0, error: null, f: { trang_thai: 'dang_chuan_bi', staffId: '' }, detailId: null, form: null,
+  taskEdits: {}, newTask: { nhom: 'khac', ten: '' }, startDay: '', saving: false, tpl: null, tplLoai: 'nuoc_ngoai', tplEdit: {}, tplSaved: false };
+
+function loadPrep() {
+  prep.loading = 12; prep.error = null;
+  const fail = (msg) => { prep.loading--; prep.error = msg; render(); };
+  const into = (obj, key) => (rows) => { obj[key] = rows; prep.loading--; render(); };
+  runServer('getPreEntries', [Object.assign({}, prep.f)], into(prep, 'data'), fail);
+  [['PRE_ENTRY', 'pres'], ['PRE_TASK', 'preTasks'], ['CASE_DOCUMENT', 'caseDocs'], ['PERSON_DOC', 'personDocs'], ['FILE', 'files'], ['COMPANY', 'rows'],
+    ['STAFF', 'staff'], ['LOOKUP', 'lookup'], ['IMMIGRATION_CASE', 'cases'], ['APPLICATION', 'apps'], ['EMPLOYMENT', 'emps']]
+    .forEach((x) => runServer('listRecords', [x[0]], into(company, x[1]), fail));
+  runServer('listRecords', ['PERSON'], (rows) => { person.rows = rows; render(); }, fail);
+}
+
+function reloadPrepRows() {
+  runServer('getPreEntries', [Object.assign({}, prep.f)], (res) => { prep.data = res; render(); }, (msg) => { prep.error = msg; render(); });
+  runServer('listRecords', ['PRE_ENTRY'], (rows) => { company.pres = rows; render(); }, () => {});
+  runServer('listRecords', ['PRE_TASK'], (rows) => { company.preTasks = rows; render(); }, () => {});
+}
+
+function goPreEntry(id) {
+  page = 'prep'; prep.detailId = id; prep.form = null; prep.taskEdits = {};
+  loadPrep(); render(); window.scrollTo(0, 0);
+}
+
+function prepSave(fn, args, onOk) {
+  prep.saving = true; prep.error = null; render();
+  runServer(fn, args,
+    (res) => { prep.saving = false; if (onOk) onOk(res); reloadPrepRows(); },
+    (msg, raw) => {
+      prep.saving = false;
+      const field = validationField(raw);
+      if (prep.form && field) prep.form.fe = { field: field, msg: msg }; else prep.error = msg;
+      if (msg === t('err.CONFLICT')) { prep.taskEdits = {}; reloadPrepRows(); }
+      render();
+    });
+}
+
+const preName = (id) => { const p = (person.rows || []).find((x) => x.id === id); return p ? p.ma + ' · ' + p.ho_ten_latin : ''; };
+const coLabel = (id) => { const c = (company.rows || []).find((x) => x.id === id); return c ? c.ten_phap_nhan + (c.ten_co_so ? ' / ' + c.ten_co_so : '') : ''; };
+const waitText = (w) => Object.keys(w || {}).map((k) => t('pre.wait.' + k) + ' ' + w[k]).join(' · ');
+
+// ---- Form thêm / sửa ----
+function openPrepForm(row, personId) {
+  const keys = ['person_id', 'company_id', 'loai', 'ngay_nhap_canh', 'ngay_vao_lam', 'cs_staff_id', 'giay_to_staff_id', 'trang_thai', 'cho_ben', 'link', 'ghi_chu'];
+  const data = {};
+  keys.forEach((k) => { data[k] = row ? row[k] || '' : ''; });
+  if (!row) {
+    data.person_id = personId || ''; data.trang_thai = 'dang_chuan_bi';
+    const p = (person.rows || []).find((x) => x.id === personId);
+    data.loai = p && p.noi_o === 'nhat' ? 'trong_nuoc' : 'nuoc_ngoai';
+    if (p) { data.cs_staff_id = p.cs_staff_id || ''; data.giay_to_staff_id = p.giay_to_staff_id || ''; }
+  }
+  prep.form = { id: row ? row.id : '', ma: row ? row.ma : '', sua_luc: row ? row.sua_luc : '', data: data, fe: null };
+  prep.error = null;
+  render();
+}
+
+function submitPrepForm() {
+  const f = prep.form;
+  const req = ['person_id', 'company_id'].find((k) => !f.data[k]);
+  if (req) { f.fe = { field: req, msg: fmt('val.required', { field: t('field.' + req) }) }; render(); return; }
+  const data = Object.assign({}, f.data);
+  if (f.id) { delete data.person_id; prepSave('updateRecord', ['PRE_ENTRY', f.id, data, f.sua_luc], () => { prep.form = null; }); }
+  else prepSave('createRecord', ['PRE_ENTRY', data], (rec) => { prep.form = null; prep.detailId = rec.id; });
+}
+
+function renderPrepForm() {
+  const f = prep.form;
+  const fe = f.fe;
+  const wrap = el('section', 'stack');
+  wrap.append(el('h3', null, f.id ? fmt('pre.editTitle', { ma: f.ma }) : t('pre.newTitle')));
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitPrepForm(); });
+  const people = (person.rows || []).filter((p) => !p.da_an || p.id === f.data.person_id).sort((a, b) => (a.ho_ten_latin < b.ho_ten_latin ? -1 : 1)).map((p) => [p.id, p.ho_ten_latin + ' (' + p.ma + ')']);
+  const cos = (company.rows || []).filter((c) => !c.da_an || c.id === f.data.company_id).sort((a, b) => (a.ten_phap_nhan < b.ten_phap_nhan ? -1 : 1)).map((c) => [c.id, coLabel(c.id) + ' (' + c.ma + ')']);
+  if (!f.id) form.append(companyInput(f, 'person_id', { required: true, fe: fe, options: [['', '—']].concat(people) }));
+  form.append(
+    companyInput(f, 'company_id', { required: true, fe: fe, options: [['', '—']].concat(cos) }),
+    companyInput(f, 'loai', { fe: fe, options: CHOICES.preTypes.map((k) => [k, t('pre.type.' + k)]) }),
+    companyInput(f, 'ngay_nhap_canh', { type: 'date', fe: fe }),
+    companyInput(f, 'ngay_vao_lam', { type: 'date', fe: fe }),
+    companyInput(f, 'giay_to_staff_id', { fe: fe, options: asOptions(staffOptions(idList(f.data.giay_to_staff_id))) }),
+    companyChecks(f, 'cs_staff_id', staffOptions(idList(f.data.cs_staff_id)), 'company.noStaff', fe),
+    companyInput(f, 'cho_ben', { fe: fe, options: [['', '—']].concat(CHOICES.waitParties.map((k) => [k, t('pre.wait.' + k)])) }));
+  if (f.id) form.append(companyInput(f, 'trang_thai', { fe: fe, options: ['dang_chuan_bi', 'huy'].concat(f.data.trang_thai === 'da_vao_lam' ? ['da_vao_lam'] : []).map((k) => [k, t('pre.status.' + k)]) }));
+  form.append(companyInput(f, 'link', { type: 'url', max: 500, fe: fe, placeholder: 'https://drive.google.com/…' }),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 2000, wide: true, fe: fe }));
+  if (!f.id) form.append(el('div', 'muted wide', t('pre.tplNote')));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', prep.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = prep.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = prep.saving;
+  cancel.addEventListener('click', () => { prep.form = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(form);
+  return wrap;
+}
+
+// ---- Danh sách ----
+function prepProgress(r) {
+  const box = el('div', 'stack tight');
+  box.append(el('span', null, fmt('pre.prog.contract', { a: r.contract.done, b: r.contract.total })),
+    el('span', null, fmt('pre.prog.docs', { a: r.docs_done, b: r.docs_total })),
+    el('span', null, r.visa_case ? fmt('pre.prog.visa', { ma: r.visa_case.ma, st: t('visa.status.' + r.visa_case.trang_thai) }) : t('pre.prog.noVisa')),
+    el('span', r.overdue ? 'msg-err' : null, fmt('pre.prog.tasks', { a: r.tasks_done, b: r.tasks_total }) + (r.overdue ? ' · ' + fmt('pre.prog.overdue', { n: r.overdue }) : '')));
+  return box;
+}
+
+function renderPrepList(root) {
+  const bar = el('div', 'toolbar');
+  const filters = el('div', 'filters');
+  const st = el('select'); st.setAttribute('aria-label', t('field.trang_thai'));
+  [['', t('field.trang_thai') + ': ' + t('company.all')]].concat(CHOICES.preStatuses.map((k) => [k, t('pre.status.' + k)])).forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; st.append(op); });
+  st.value = prep.f.trang_thai;
+  st.addEventListener('change', () => { prep.f.trang_thai = st.value; reloadPrepRows(); });
+  const sf = el('select'); sf.setAttribute('aria-label', t('company.filterStaff'));
+  [['', t('company.filterStaff') + ': ' + t('company.all')]].concat(company.staff.map((s) => [s.id, staffLabel(s.id)])).forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; sf.append(op); });
+  sf.value = prep.f.staffId;
+  sf.addEventListener('change', () => { prep.f.staffId = sf.value; reloadPrepRows(); });
+  filters.append(st, sf);
+  const add = el('button', 'btn-primary', t('pre.add'));
+  add.type = 'button'; add.disabled = prep.saving || !!prep.form;
+  add.addEventListener('click', () => openPrepForm(null, ''));
+  bar.append(filters, add);
+  root.append(bar, el('div', 'muted', t('pre.desc')));
+  if (prep.form) root.append(renderPrepForm());
+  if (prep.error) root.append(el('div', 'msg-err', prep.error));
+  const d = prep.data;
+  if (!d) { root.append(el('div', 'muted', t('setup.loading'))); return; }
+  if (!d.rows.length) { root.append(el('div', 'muted', t('pre.empty'))); return; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['field.person_id', 'field.company_id', 'pre.col.dates', 'pre.col.staff', 'pre.col.progress', 'pre.col.next', 'pre.col.waiting'];
+  const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  d.rows.forEach((r) => {
+    const tr = el('tr', r.overdue ? 'overdue' : null);
+    const c = (i, node) => { const td = el('td'); td.dataset.label = t(cols[i]); if (node) td.append(node); return td; };
+    const who = el('div', 'stack tight');
+    const open = el('button', 'link-btn', r.person_ma + ' · ' + r.person); open.type = 'button';
+    open.addEventListener('click', () => { prep.detailId = r.id; prep.form = null; prep.taskEdits = {}; render(); window.scrollTo(0, 0); });
+    who.append(open, el('span', 'muted', r.ma + ' · ' + t('pre.type.' + r.loai) + (r.trang_thai !== 'dang_chuan_bi' ? ' · ' + t('pre.status.' + r.trang_thai) : '')));
+    const dates = el('div', 'stack tight nowrap');
+    dates.append(el('span', null, fmt('pre.entryOn', { d: r.ngay_nhap_canh || '—' })), el('span', null, fmt('pre.startOn', { d: r.ngay_vao_lam || '—' })));
+    const staff = el('div', 'stack tight');
+    staff.append(el('span', null, 'CS: ' + (idList(r.cs_staff_id).map(staffLabel).join(', ') || '—')), el('span', null, t('pre.docStaff') + ': ' + (r.giay_to_staff_id ? staffLabel(r.giay_to_staff_id) : '—')));
+    const next = r.next_task ? el('span', r.next_task.overdue ? 'msg-err' : null, r.next_task.han + ' · ' + r.next_task.ten) : el('span', 'muted', '—');
+    tr.append(c(0, who), c(1, document.createTextNode(r.company)), c(2, dates), c(3, staff), c(4, prepProgress(r)), c(5, next), c(6, document.createTextNode(waitText(r.waiting) || '—')));
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  root.append(wrap);
+}
+
+// ---- Chi tiết ----
+function renderPrepTasks(r) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'pre-tasks-h');
+  const h = el('h3', null, t('pre.tasksTitle')); h.id = 'pre-tasks-h';
+  box.append(h);
+  const today = todayJst();
+  const tasks = (company.preTasks || []).filter((x) => x.pre_entry_id === r.id && !x.da_an).sort(byMa);
+  if (!tasks.length) box.append(el('div', 'muted', t('pre.noTasks')));
+  else {
+    const wrap = el('div', 'table-wrap');
+    const table = el('table', 'cards many');
+    const cols = ['field.ten', 'field.trang_thai', 'field.han', 'field.phu_trach_staff_id', 'field.cho_ben', 'field.link', 'field.ghi_chu', 'staff.col.actions'];
+    const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+    const thead = el('thead'); thead.append(head);
+    const tbody = el('tbody');
+    tasks.forEach((x) => {
+      const e = prep.taskEdits[x.id] || { trang_thai: x.trang_thai, han: x.han, phu_trach_staff_id: x.phu_trach_staff_id, cho_ben: x.cho_ben, link: x.link, ghi_chu: x.ghi_chu };
+      const keep = () => { prep.taskEdits[x.id] = e; };
+      const c = (i, nodes) => { const td = el('td'); td.dataset.label = t(cols[i]); nodes.forEach((n) => n && td.append(n)); return td; };
+      const lbl = (k) => t('field.' + k) + ' ' + x.ten;
+      const sel = (k, options) => { const s = el('select', 'cell-input'); s.setAttribute('aria-label', lbl(k)); options.forEach((o) => { const op = el('option', null, o[1]); op.value = o[0]; s.append(op); }); s.value = e[k]; s.addEventListener('change', () => { e[k] = s.value; keep(); }); return s; };
+      const inp = (k, type) => { const i = el('input', 'cell-input'); if (type) i.type = type; i.value = e[k]; i.setAttribute('aria-label', lbl(k)); i.addEventListener('input', () => { e[k] = i.value; keep(); }); return i; };
+      const name = el('div', 'stack tight');
+      name.append(el('strong', null, x.ten), el('span', 'muted', t('pre.group.' + x.nhom) + ' · ' + fmt('dl.updated', { d: String(x.sua_luc || '').slice(0, 16) })));
+      const late = x.han && x.han < today && CHOICES.preTaskDone.indexOf(x.trang_thai) < 0;
+      if (late) name.append(el('span', 'msg-err', fmt('dl.overdue', { d: x.han })));
+      const link = inp('link', 'url'); link.placeholder = 'https://…';
+      const note = inp('ghi_chu'); note.maxLength = 1000;
+      const acts = el('div', 'row-actions');
+      const save = el('button', 'btn', t('staff.save')); save.type = 'button'; save.disabled = prep.saving;
+      save.setAttribute('aria-label', t('staff.save') + ' ' + x.ten);
+      save.addEventListener('click', () => prepSave('updateRecord', ['PRE_TASK', x.id, Object.assign({}, e), x.sua_luc], () => { delete prep.taskEdits[x.id]; }));
+      const drop = el('button', 'btn', t('visa.docRemove')); drop.type = 'button'; drop.disabled = prep.saving;
+      drop.setAttribute('aria-label', t('visa.docRemove') + ' ' + x.ten);
+      drop.addEventListener('click', () => prepSave('setHidden', ['PRE_TASK', x.id, true, x.sua_luc], () => { delete prep.taskEdits[x.id]; }));
+      acts.append(save, drop);
+      const tr = el('tr', CHOICES.preTaskDone.indexOf(x.trang_thai) >= 0 ? 'done-row' : late ? 'overdue' : null);
+      tr.append(c(0, [name]), c(1, [sel('trang_thai', CHOICES.preTaskStatuses.map((s) => [s, t('pre.task.' + s)]))]), c(2, [inp('han', 'date')]),
+        c(3, [sel('phu_trach_staff_id', asOptions(staffOptions(idList(e.phu_trach_staff_id))))]),
+        c(4, [sel('cho_ben', [['', '—']].concat(CHOICES.waitParties.map((k) => [k, t('pre.wait.' + k)])))]), c(5, [link, linkEl(x.link)]), c(6, [note]), c(7, [acts]));
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    box.append(wrap);
+  }
+  const bar = el('div', 'filters');
+  const g = el('select'); g.setAttribute('aria-label', t('field.nhom'));
+  CHOICES.preGroups.forEach((k) => { const o = el('option', null, t('pre.group.' + k)); o.value = k; g.append(o); });
+  g.value = prep.newTask.nhom;
+  g.addEventListener('change', () => { prep.newTask.nhom = g.value; });
+  const n = el('input'); n.maxLength = 200; n.placeholder = t('pre.taskName'); n.value = prep.newTask.ten; n.setAttribute('aria-label', t('pre.taskName'));
+  n.addEventListener('input', () => { prep.newTask.ten = n.value; });
+  const add = el('button', 'btn', t('visa.docAddBtn')); add.type = 'button'; add.disabled = prep.saving;
+  add.addEventListener('click', () => { if (prep.newTask.ten.trim()) prepSave('createRecord', ['PRE_TASK', { pre_entry_id: r.id, nhom: prep.newTask.nhom, ten: prep.newTask.ten }], () => { prep.newTask = { nhom: 'khac', ten: '' }; }); });
+  bar.append(g, n, add);
+  box.append(bar);
+  return box;
+}
+
+function renderPrepDetail(root) {
+  const back = el('button', 'btn', t('pre.back'));
+  back.type = 'button';
+  back.addEventListener('click', () => { prep.detailId = null; prep.form = null; render(); });
+  root.append(back);
+  const r = (company.pres || []).find((x) => x.id === prep.detailId);
+  if (!r) { root.append(el('div', 'muted', prep.loading ? t('setup.loading') : t('err.NOT_FOUND'))); return; }
+  const head = el('div', 'toolbar');
+  head.append(el('h2', null, r.ma + ' · ' + preName(r.person_id)));
+  const edit = el('button', 'btn', t('staff.edit'));
+  edit.type = 'button'; edit.disabled = prep.saving || !!prep.form;
+  edit.addEventListener('click', () => openPrepForm(r));
+  const toPerson = el('button', 'btn', t('tk.openPerson'));
+  toPerson.type = 'button'; toPerson.addEventListener('click', () => goPersonDetail(r.person_id));
+  head.append(edit, toPerson);
+  root.append(head);
+  if (prep.form) root.append(renderPrepForm());
+  if (prep.error) root.append(el('div', 'msg-err', prep.error));
+  const info = el('dl', 'info');
+  const app = (company.apps || []).find((a) => a.id === r.application_id);
+  const emp = (company.emps || []).find((e) => e.id === r.employment_id);
+  [['trang_thai', t('pre.status.' + r.trang_thai)], ['company_id', coLabel(r.company_id)], ['loai', t('pre.type.' + r.loai)],
+    ['ngay_nhap_canh', r.ngay_nhap_canh], ['ngay_vao_lam', r.ngay_vao_lam], ['cs_staff_id', idList(r.cs_staff_id).map(staffLabel).join(', ')],
+    ['giay_to_staff_id', r.giay_to_staff_id ? staffLabel(r.giay_to_staff_id) : ''], ['cho_ben', r.cho_ben ? t('pre.wait.' + r.cho_ben) : ''],
+    ['application_id', app ? app.ma + ' · ' + t('app.status.' + app.trang_thai_hien_tai) : ''], ['employment_id', emp ? emp.ma + ' · ' + emp.ngay_vao_lam : ''],
+    ['ghi_chu', r.ghi_chu]].forEach((p) => { info.append(el('dt', null, t('field.' + p[0])), el('dd', 'pre', p[1] || '—')); });
+  info.append(el('dt', null, t('field.link')), el('dd', null)); info.lastChild.append(linkEl(r.link));
+  root.append(info);
+  // Xác nhận vào làm → tạo lần vào làm (sang Đang làm việc), giữ nguyên công việc / giấy tờ.
+  if (r.trang_thai === 'dang_chuan_bi') {
+    const bar = el('div', 'filters');
+    const day = el('input'); day.type = 'date'; day.value = prep.startDay || r.ngay_vao_lam || ''; day.setAttribute('aria-label', t('field.ngay_vao_lam'));
+    day.addEventListener('input', () => { prep.startDay = day.value; });
+    const go = el('button', 'btn-primary', t('pre.start')); go.type = 'button'; go.disabled = prep.saving;
+    go.addEventListener('click', () => prepSave('startFromPreEntry', [r.id, day.value, r.sua_luc], () => { prep.startDay = ''; runServer('listRecords', ['EMPLOYMENT'], (rows) => { company.emps = rows; render(); }, () => {}); }));
+    bar.append(el('span', null, t('pre.startHint')), day, go);
+    root.append(bar);
+  }
+  // Hồ sơ visa của người này (mở để xem / sửa checklist giấy tờ visa).
+  const cases = (company.cases || []).filter((c) => c.person_id === r.person_id && !c.da_an).sort(byMa).reverse();
+  const vbox = el('section', 'stack');
+  vbox.append(el('h3', null, t('pre.visaTitle')));
+  if (!cases.length) vbox.append(el('div', 'muted', t('pre.noVisa')));
+  cases.forEach((c) => {
+    const b = el('button', 'link-btn', c.ma + ' · ' + t('visa.type.' + c.loai_thu_tuc) + ' · ' + t('visa.status.' + c.trang_thai));
+    b.type = 'button'; b.addEventListener('click', () => goVisaCase(c.id));
+    vbox.append(b);
+  });
+  const docBox = el('section', 'stack');
+  docBox.setAttribute('aria-labelledby', 'pre-docs-h');
+  const dh = el('h3', null, t('pre.docsTitle')); dh.id = 'pre-docs-h';
+  docBox.append(dh, renderDocTable({ key: 'pre_entry_id', id: r.id, personId: r.person_id }));
+  root.append(renderPrepTasks(r), docBox, vbox);
+}
+
+function renderPrepPage() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  const root = el('div', 'stack');
+  if (prep.detailId) renderPrepDetail(root); else renderPrepList(root);
+  body.append(root);
+}
+
+// ---- Mục 受入れ前 trong hồ sơ người ----
+function renderPersonPres(p) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'person-pre-h');
+  const head = el('div', 'toolbar');
+  const h = el('h2', null, t('nav.prep')); h.id = 'person-pre-h';
+  const add = el('button', 'btn', t('pre.add'));
+  add.type = 'button';
+  add.addEventListener('click', () => { page = 'prep'; prep.detailId = null; loadPrep(); openPrepForm(null, p.id); window.scrollTo(0, 0); });
+  head.append(h, add);
+  box.append(head);
+  const list = (company.pres || []).filter((x) => x.person_id === p.id && !x.da_an).sort(byMa).reverse();
+  if (!list.length) { box.append(el('div', 'muted', t('pre.personEmpty'))); return box; }
+  const ul = el('ul', 'history');
+  list.forEach((x) => {
+    const li = el('li');
+    const b = el('button', 'link-btn', x.ma + ' · ' + coLabel(x.company_id)); b.type = 'button';
+    b.addEventListener('click', () => goPreEntry(x.id));
+    li.append(b, el('span', 'muted', ' ' + t('pre.status.' + x.trang_thai) + ' · ' + fmt('pre.startOn', { d: x.ngay_vao_lam || '—' })));
+    ul.append(li);
+  });
+  box.append(ul);
+  return box;
+}
+
+// ---- Cài đặt → 受入れ前: mẫu công việc theo loại ----
+function loadPreTemplates() {
+  runServer('getPreTemplates', [], (res) => { prep.tpl = res; prep.tplEdit = {}; render(); }, (msg) => { prep.error = msg; render(); });
+}
+
+function renderPreTemplateSettings() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'pretpl-h');
+  const h = el('h2', null, t('pre.tplTitle')); h.id = 'pretpl-h';
+  box.append(h, el('div', 'muted', t('pre.tplDesc')));
+  if (!prep.tpl) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  const typeSel = el('select'); typeSel.setAttribute('aria-label', t('field.loai'));
+  CHOICES.preTypes.forEach((k) => { const o = el('option', null, t('pre.type.' + k)); o.value = k; typeSel.append(o); });
+  typeSel.value = prep.tplLoai;
+  typeSel.addEventListener('change', () => { prep.tplLoai = typeSel.value; prep.tplSaved = false; render(); });
+  box.append(typeSel);
+  const cur = prep.tpl[prep.tplLoai];
+  const rows = prep.tplEdit[prep.tplLoai] || cur.tasks.map((x) => x.slice());
+  prep.tplEdit[prep.tplLoai] = rows;
+  if (!cur.custom) box.append(el('div', 'muted', t('visa.tplDefault')));
+  const list = el('div', 'stack tight');
+  rows.forEach((x, i) => {
+    const line = el('div', 'filters');
+    const g = el('select'); g.setAttribute('aria-label', t('field.nhom') + ' ' + (i + 1));
+    CHOICES.preGroups.forEach((k) => { const o = el('option', null, t('pre.group.' + k)); o.value = k; g.append(o); });
+    g.value = x[0]; g.addEventListener('change', () => { x[0] = g.value; });
+    const n = el('input'); n.value = x[1]; n.maxLength = 200; n.setAttribute('aria-label', t('pre.taskName') + ' ' + (i + 1));
+    n.addEventListener('input', () => { x[1] = n.value; });
+    const del = el('button', 'btn small', '×'); del.type = 'button'; del.setAttribute('aria-label', t('fin.splitRemove') + ' ' + (i + 1));
+    del.addEventListener('click', () => { rows.splice(i, 1); render(); });
+    line.append(g, n, del);
+    list.append(line);
+  });
+  box.append(list);
+  const more = el('button', 'btn', t('pre.tplAdd')); more.type = 'button';
+  more.addEventListener('click', () => { rows.push(['khac', '']); render(); });
+  const save = el('button', 'btn-primary', prep.saving ? t('ui.saving') : t('staff.save')); save.type = 'button'; save.disabled = prep.saving;
+  save.addEventListener('click', () => {
+    prep.saving = true; prep.tplSaved = false; render();
+    runServer('savePreTemplate', [prep.tplLoai, rows.map((x) => x.slice()), cur.sua_luc],
+      () => { prep.saving = false; prep.tplSaved = true; loadPreTemplates(); },
+      (msg) => { prep.saving = false; prep.error = msg; render(); });
+  });
+  const acts = el('div', 'filters'); acts.append(more, save);
+  box.append(acts);
+  if (prep.tplSaved) box.append(el('div', 'msg-ok', t('visa.tplSaved')));
+  if (prep.error && page === 'settings') box.append(el('div', 'msg-err', prep.error));
+  return box;
+}
+</script>

@@ -1,0 +1,310 @@
+<script>
+// GĐ 5 (D-069): trang "Doanh số" — thẻ Cần lập (gợi ý tự sinh), Báo cáo tháng + mục tiêu, Các khoản (sửa / bỏ / thêm tay).
+// Dùng t(), fmt(), el(), render(), runServer(), CHOICES của Index.html; company, companyInput(), validationField(), todayJst() của Company.html;
+// yen(), splitText(), splitEditor() của FinanceUi.html; goPersonDetail() của DashboardUi.html.
+const SALES_TABS = ['can_lap', 'bao_cao'];
+let sales = { tab: 'can_lap', todo: null, todoEdits: {}, report: null, month: '', loading: false, saving: false, error: null, msg: null,
+  form: null, fieldErr: null, targets: {} };
+
+function loadSalesPage() {
+  if (!can('doanh_so')) { loadMySales(); return; } // D-077: chỉ quyền "doanh số của mình"
+  runServer('listRecords', ['STAFF'], (rows) => { company.staff = rows; render(); }, (msg) => { sales.error = msg; render(); });
+  runServer('listRecords', ['COMPANY'], (rows) => { company.rows = rows; render(); }, (msg) => { sales.error = msg; render(); });
+  if (sales.tab === 'can_lap') loadTodo(); else loadReport();
+}
+
+function loadTodo() {
+  sales.loading = true; sales.error = null;
+  runServer('getRevenueTodo', [], (rows) => { sales.loading = false; sales.todo = rows; render(); }, (msg) => { sales.loading = false; sales.error = msg; render(); });
+}
+
+function loadReport() {
+  sales.loading = true; sales.error = null;
+  runServer('getSales', [{ month: sales.month }], (res) => { sales.loading = false; sales.report = res; sales.month = res.month; sales.targets = {}; render(); },
+    (msg) => { sales.loading = false; sales.error = msg; render(); });
+}
+
+function salesCall(fn, args, after) {
+  sales.saving = true; sales.error = null; sales.msg = null; render();
+  runServer(fn, args, (res) => { sales.saving = false; after(res); },
+    (msg, raw) => {
+      sales.saving = false;
+      const field = validationField(raw);
+      if (field && sales.form) sales.fieldErr = { field: field, msg: msg }; else sales.error = msg;
+      if (msg === t('err.CONFLICT')) { sales.todoEdits = {}; sales.form = null; sales.tab === 'can_lap' ? loadTodo() : loadReport(); }
+      render();
+    });
+}
+
+// ---- D-077: Doanh số của tôi (phần được chia cho mình + mục tiêu của mình) ----
+let my = { data: null, month: '', error: null };
+
+function loadMySales() {
+  runServer('getMySales', [{ month: my.month }], (res) => { my.data = res; my.month = res.month; render(); }, (msg) => { my.error = msg; render(); });
+}
+
+function renderMySales(body) {
+  const root = el('div', 'stack');
+  const bar = el('div', 'filters');
+  const m = el('input'); m.type = 'month'; m.value = my.month; m.setAttribute('aria-label', t('dash.month'));
+  m.addEventListener('change', () => { if (m.value) { my.month = m.value; loadMySales(); } });
+  bar.append(m);
+  root.append(el('h2', null, t('my.title')), bar);
+  if (my.error) root.append(el('div', 'msg-err', my.error));
+  const d = my.data;
+  if (!d) { root.append(el('div', 'muted', t('setup.loading'))); body.append(root); return; }
+  const kpis = el('div', 'kpis');
+  kpis.append(kpi(t('my.actual'), yen(d.actual)), kpi(t('sales.target'), yen(d.target)), kpi(t('sales.reach'), pctOf(d.actual, d.target)));
+  root.append(kpis);
+  const max = Math.max(1, ...d.series.map((x) => Math.max(Math.abs(x.total), x.target)));
+  const chart = el('div', 'bars');
+  chart.setAttribute('role', 'img'); chart.setAttribute('aria-label', t('sales.series'));
+  d.series.forEach((x) => {
+    const row = el('div', 'bar-row');
+    const track = el('div', 'bar-track');
+    const fill = el('div', 'bar-fill' + (x.total < 0 ? ' neg' : '')); fill.style.width = Math.round(Math.abs(x.total) * 100 / max) + '%';
+    track.append(fill);
+    if (x.target) { const tg = el('div', 'bar-target'); tg.style.left = Math.round(x.target * 100 / max) + '%'; track.append(tg); }
+    row.append(el('span', 'nowrap muted', x.month), track, el('span', 'nowrap', yen(x.total)));
+    chart.append(row);
+  });
+  root.append(el('h2', null, t('sales.series')), chart);
+  root.append(el('h2', null, fmt('sales.items', { n: d.items.length })));
+  if (!d.items.length) root.append(el('div', 'muted', t('sales.noItems')));
+  else {
+    const ul = el('ul', 'history');
+    d.items.forEach((x) => ul.append(el('li', null, x.ngay + ' · ' + t('sales.type.' + x.loai) + (x.thang ? ' ' + x.thang : '') + ' · ' + x.company +
+      (x.person ? ' · ' + x.person : '') + ' — ' + yen(x.share) + ' (' + x.pct + '%)')));
+    root.append(ul);
+  }
+  root.append(el('div', 'muted', t('my.note')));
+  body.append(root);
+}
+
+function renderSalesPage() {
+  const body = document.getElementById('pageBody');
+  body.replaceChildren();
+  if (!can('doanh_so')) { renderMySales(body); return; }
+  const root = el('div', 'stack');
+  const tabs = el('div', 'tabs');
+  tabs.setAttribute('role', 'tablist');
+  SALES_TABS.forEach((k) => {
+    const b = el('button', 'tab', t('sales.tab.' + k));
+    b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(sales.tab === k));
+    b.addEventListener('click', () => { sales.tab = k; sales.form = null; sales.msg = null; k === 'can_lap' ? loadTodo() : loadReport(); render(); });
+    tabs.append(b);
+  });
+  root.append(tabs);
+  if (sales.error) root.append(el('div', 'msg-err', sales.error));
+  if (sales.msg) root.append(el('div', 'msg-ok', sales.msg));
+  root.append(sales.tab === 'can_lap' ? renderTodo() : renderReport());
+  body.append(root);
+}
+
+// ---- Cần lập ----
+function renderTodo() {
+  const box = el('div', 'stack');
+  const list = sales.todo;
+  const bar = el('div', 'toolbar');
+  const refresh = el('button', 'btn', t('dash.refresh'));
+  refresh.type = 'button'; refresh.disabled = sales.loading;
+  refresh.addEventListener('click', () => { loadTodo(); render(); });
+  const all = el('button', 'btn-primary', fmt('sales.makeAll', { n: list ? list.length : 0 }));
+  all.type = 'button'; all.disabled = sales.saving || !list || !list.length;
+  all.addEventListener('click', () => salesCall('applyRevenueTodo', [list.map((r) => r.key), false, sales.todoEdits],
+    (res) => { sales.todoEdits = {}; sales.msg = fmt('sales.made', { n: res.length }); loadTodo(); }));
+  bar.append(el('div', 'muted', t('sales.todoDesc')), el('div', 'filters'));
+  bar.lastChild.append(refresh, all);
+  box.append(bar);
+  if (!list) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  if (!list.length) { box.append(el('div', 'msg-ok', t('sales.todoNone'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards many');
+  const cols = ['field.ngay', 'field.loai', 'field.company_id', 'field.person_id', 'field.so_tien', 'field.chia', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i, node) => { const td = el('td'); td.dataset.label = t(cols[i]); if (node !== null && node !== undefined) td.append(typeof node === 'string' ? document.createTextNode(node) : node); return td; };
+  list.forEach((r) => {
+    const e = sales.todoEdits[r.key] || {};
+    const type = el('div', null, t('sales.type.' + r.loai) + (r.thang ? ' ' + r.thang : ''));
+    const note = el('div', 'muted', r.contract + (r.loai === 'hoan' ? ' · ' + fmt('sales.refundWhy', { d: r.days, p: r.pct }) : ''));
+    const typeBox = el('div'); typeBox.append(type, note);
+    const amount = el('input', 'num-input money'); amount.type = 'number'; amount.step = '1'; amount.value = e.so_tien !== undefined ? e.so_tien : r.so_tien;
+    amount.setAttribute('aria-label', t('field.so_tien') + ' ' + r.person + ' ' + t('sales.type.' + r.loai));
+    amount.addEventListener('input', () => { sales.todoEdits[r.key] = Object.assign(sales.todoEdits[r.key] || {}, { so_tien: amount.value }); });
+    const amountBox = el('div'); amountBox.append(amount, el('div', 'muted', yen(r.so_tien)));
+    const acts = el('div', 'row-actions');
+    const make = el('button', 'btn', t('sales.make'));
+    make.type = 'button'; make.disabled = sales.saving;
+    make.setAttribute('aria-label', t('sales.make') + ' ' + r.person + ' ' + t('sales.type.' + r.loai));
+    make.addEventListener('click', () => salesCall('applyRevenueTodo', [[r.key], false, sales.todoEdits[r.key] ? { [r.key]: sales.todoEdits[r.key] } : null],
+      () => { delete sales.todoEdits[r.key]; sales.msg = fmt('sales.made', { n: 1 }); loadTodo(); }));
+    const skip = el('button', 'btn', t('sales.skip'));
+    skip.type = 'button'; skip.disabled = sales.saving;
+    skip.setAttribute('aria-label', t('sales.skip') + ' ' + r.person + ' ' + t('sales.type.' + r.loai));
+    skip.addEventListener('click', () => salesCall('applyRevenueTodo', [[r.key], true], () => { delete sales.todoEdits[r.key]; loadTodo(); }));
+    acts.append(make, skip);
+    const pc = el('button', 'link-btn', r.person);
+    pc.type = 'button'; pc.addEventListener('click', () => goPersonDetail(r.person_id));
+    const tr = el('tr', r.loai === 'hoan' ? 'warn-row' : null);
+    tr.append(cell(0, r.ngay), cell(1, typeBox), cell(2, r.company), cell(3, pc), cell(4, amountBox), cell(5, splitText(r.chia)), cell(6, acts));
+    tr.firstChild.classList.add('nowrap');
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap, el('div', 'muted', t('sales.todoNote')));
+  return box;
+}
+
+// ---- Báo cáo tháng + mục tiêu + các khoản ----
+function targetInput(staffId, current) {
+  const k = staffId || '_';
+  const wrap = el('div', 'filters');
+  const input = el('input', 'num-input money'); input.type = 'number'; input.min = '0'; input.step = '1';
+  input.value = sales.targets[k] !== undefined ? sales.targets[k] : String(current || 0);
+  input.setAttribute('aria-label', t('sales.target') + ' ' + (staffId ? staffName(staffId) : t('sales.company')));
+  input.addEventListener('input', () => { sales.targets[k] = input.value; });
+  const save = el('button', 'btn small', t('staff.save'));
+  save.type = 'button'; save.disabled = sales.saving;
+  save.setAttribute('aria-label', t('staff.save') + ' ' + input.getAttribute('aria-label'));
+  save.addEventListener('click', () => salesCall('saveTarget', [staffId, sales.month, input.value], () => { delete sales.targets[k]; loadReport(); }));
+  wrap.append(input, save);
+  return wrap;
+}
+
+const pctOf = (a, b) => (b > 0 ? Math.round(a * 100 / b) + '%' : '—');
+
+function renderReport() {
+  const box = el('div', 'stack');
+  const d = sales.report;
+  const bar = el('div', 'filters');
+  const m = el('input'); m.type = 'month'; m.value = sales.month; m.setAttribute('aria-label', t('dash.month'));
+  m.addEventListener('change', () => { if (m.value) { sales.month = m.value; loadReport(); render(); } });
+  const add = el('button', 'btn-primary', t('sales.addManual'));
+  add.type = 'button'; add.disabled = sales.saving || !!sales.form;
+  add.addEventListener('click', () => { sales.form = { id: null, data: { loai: 'khac', company_id: '', ngay: todayJst(), thang: '', so_tien: '', ghi_chu: '' }, chia: { chia: '' } }; sales.fieldErr = null; render(); });
+  bar.append(m, add);
+  box.append(bar);
+  if (sales.form && !sales.form.id) box.append(renderRevenueForm());
+  if (!d) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  if (sales.loading) box.append(el('div', 'muted', t('setup.loading')));
+  const kpis = el('div', 'kpis');
+  kpis.append(kpi(t('sales.total'), yen(d.total)), kpi(t('sales.target'), yen(d.target)), kpi(t('sales.reach'), pctOf(d.total, d.target)));
+  box.append(kpis);
+  const ctg = el('div', 'filters');
+  ctg.append(el('span', 'muted', t('sales.companyTarget')), targetInput('', d.target));
+  box.append(ctg);
+  // Theo người
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['sales.staff', 'sales.actual', 'sales.target', 'sales.reach'];
+  const head = el('tr'); cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  d.staff.forEach((s) => {
+    const tr = el('tr');
+    const c = (i, node) => { const td = el('td'); td.dataset.label = t(cols[i]); td.append(typeof node === 'string' ? document.createTextNode(node) : node); return td; };
+    tr.append(c(0, s.ho_ten + (s.inactive ? ' (' + t('company.inactiveTag') + ')' : '')), c(1, yen(s.actual)), c(2, targetInput(s.id, s.target)), c(3, pctOf(s.actual, s.target)));
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(el('h2', null, t('sales.byStaff')), wrap);
+  if (d.unassigned) box.append(el('div', 'muted', fmt('sales.unassigned', { v: yen(d.unassigned) })));
+  // Theo loại + 12 tháng
+  const types = el('ul', 'links');
+  Object.keys(d.byType).filter((k) => d.byType[k]).forEach((k) => types.append(el('li', null, t('sales.type.' + k) + ': ' + yen(d.byType[k]))));
+  box.append(el('h2', null, t('sales.byType')), types.childNodes.length ? types : el('div', 'muted', '—'));
+  const max = Math.max(1, ...d.series.map((x) => Math.max(Math.abs(x.total), x.target)));
+  const chart = el('div', 'bars');
+  chart.setAttribute('role', 'img');
+  chart.setAttribute('aria-label', t('sales.series'));
+  d.series.forEach((x) => {
+    const row = el('div', 'bar-row');
+    const track = el('div', 'bar-track');
+    const fill = el('div', 'bar-fill' + (x.total < 0 ? ' neg' : '')); fill.style.width = Math.round(Math.abs(x.total) * 100 / max) + '%';
+    track.append(fill);
+    if (x.target) { const tg = el('div', 'bar-target'); tg.style.left = Math.round(x.target * 100 / max) + '%'; track.append(tg); }
+    row.append(el('span', 'nowrap muted', x.month), track, el('span', 'nowrap', yen(x.total)));
+    chart.append(row);
+  });
+  box.append(el('h2', null, t('sales.series')), chart, el('div', 'muted', t('sales.seriesNote')));
+  // Các khoản trong tháng
+  box.append(el('h2', null, fmt('sales.items', { n: d.items.length })));
+  if (sales.form && sales.form.id) box.append(renderRevenueForm());
+  if (!d.items.length) { box.append(el('div', 'muted', t('sales.noItems'))); return box; }
+  const w2 = el('div', 'table-wrap');
+  const t2 = el('table', 'cards many');
+  const c2 = ['staff.col.ma', 'field.ngay', 'field.loai', 'field.company_id', 'field.person_id', 'field.so_tien', 'field.chia', 'inv.col.invoice', 'staff.col.actions'];
+  const h2 = el('tr'); c2.forEach((k) => h2.append(el('th', null, t(k))));
+  const th2 = el('thead'); th2.append(h2);
+  const tb2 = el('tbody');
+  d.items.forEach((r) => {
+    const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(c2[i]); return td; };
+    const acts = el('div', 'row-actions');
+    if (!r.invoice_id) {
+      const edit = el('button', 'btn', t('staff.edit'));
+      edit.type = 'button'; edit.disabled = sales.saving || !!sales.form;
+      edit.setAttribute('aria-label', t('staff.edit') + ' ' + r.ma);
+      edit.addEventListener('click', () => { sales.form = { id: r.id, ma: r.ma, sua_luc: r.sua_luc, loai: r.loai,
+        data: { ngay: r.ngay, thang: r.thang, so_tien: r.so_tien, ghi_chu: r.ghi_chu }, chia: { chia: r.chia } }; sales.fieldErr = null; render(); });
+      const drop = el('button', 'btn', t('sales.drop'));
+      drop.type = 'button'; drop.disabled = sales.saving;
+      drop.setAttribute('aria-label', t('sales.drop') + ' ' + r.ma);
+      drop.addEventListener('click', () => salesCall('setRevenueHidden', [r.id, true, r.sua_luc], () => loadReport()));
+      acts.append(edit, drop);
+    }
+    const typeCell = cell(2, t('sales.type.' + r.loai) + (r.thang ? ' ' + r.thang : ''));
+    if (r.ghi_chu) typeCell.append(el('div', 'muted', r.ghi_chu));
+    const actCell = cell(8, null); actCell.append(acts);
+    const tr = el('tr');
+    tr.append(cell(0, r.ma), cell(1, r.ngay), typeCell, cell(3, r.company), cell(4, r.person), cell(5, yen(r.so_tien)), cell(6, splitText(r.chia)),
+      cell(7, r.invoice_ma || '—'), actCell);
+    tr.childNodes[1].classList.add('nowrap');
+    tb2.append(tr);
+  });
+  t2.append(th2, tb2);
+  w2.append(t2);
+  box.append(w2);
+  return box;
+}
+
+function renderRevenueForm() {
+  const f = sales.form;
+  const fe = sales.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.setAttribute('aria-labelledby', 'rev-form-h');
+  const h = el('h3', null, f.id ? fmt('sales.editTitle', { ma: f.ma }) : t('sales.newTitle')); h.id = 'rev-form-h';
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const data = Object.assign({}, f.data, { chia: f.chia.chia });
+    salesCall('saveRevenue', [f.id || '', data, f.sua_luc || ''], () => { sales.form = null; sales.fieldErr = null; loadReport(); });
+  });
+  if (!f.id) {
+    const cos = company.rows.filter((c) => !c.da_an).sort(byMa).map((c) => [c.id, c.ma + ' · ' + c.ten_phap_nhan]);
+    form.append(companyInput(f, 'company_id', { required: true, fe: fe, options: [['', '—']].concat(cos) }),
+      companyInput(f, 'loai', { fe: fe, options: [['khac', t('sales.type.khac')], ['hoan', t('sales.type.hoan')]] }));
+  }
+  form.append(
+    companyInput(f, 'ngay', { required: true, type: 'date', fe: fe }),
+    companyInput(f, 'so_tien', { required: true, type: 'number', fe: fe }),
+    companyInput(f, 'ghi_chu', { max: 1000, wide: true, fe: fe }));
+  const split = splitEditor(f.chia);
+  if (fe && fe.field === 'chia') { split.setAttribute('aria-invalid', 'true'); split.append(el('div', 'msg-err', fe.msg)); }
+  form.append(split);
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', sales.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = sales.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.addEventListener('click', () => { sales.form = null; sales.fieldErr = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(h, form);
+  return wrap;
+}
+</script>

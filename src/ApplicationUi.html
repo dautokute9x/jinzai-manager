@@ -1,0 +1,305 @@
+<script>
+// Bước 3.2: Lần giới thiệu trong hồ sơ người + số "đang giới thiệu" ở đơn tuyển (D-053).
+// Dùng t(), fmt(), el(), render(), runServer(), CHOICES của Index.html; company (rows, jobs, staff, apps),
+// companyInput(), validationField(), staffLabel(), staffOptions(), idList(), todayJst() của Company.html; person của PersonUi.html.
+let appl = { jobFull: null, form: null, statusForm: null, fieldErr: null, saving: false, error: null, showHidden: false,
+  historyId: null, logs: null, confirmCancel: null };
+
+function reloadApps() {
+  runServer('listRecords', ['APPLICATION'], (rows) => { company.apps = rows; render(); }, (msg) => { appl.error = msg; render(); });
+}
+
+const appEnded = (status) => CHOICES.appEnded.indexOf(status) >= 0;
+
+// Số lần giới thiệu chưa kết thúc của 1 đơn (gồm "tạm dừng", D-053 Q1).
+function activeAppCount(jobId) {
+  return (company.apps || []).filter((a) => a.job_id === jobId && !a.da_an && !appEnded(a.trang_thai_hien_tai)).length;
+}
+
+// D-020 (phần 3.2): Chờ vào làm > Đang ứng tuyển. "Đang làm" / "Đã nghỉ" có từ bước 3.4.
+// Đang làm vào ngày `day`: đã vào làm (≤ day) và chưa nghỉ hoặc ngày nghỉ sau `day` (giống máy chủ).
+// D-079: dữ liệu nhập từ file cũ thiếu ngày → theo cột tinh_trang (giống empState_ của máy chủ).
+function empState(e, day) {
+  if (e.ngay_nghi && e.ngay_nghi <= day) return 'da_nghi';
+  if (!e.ngay_nghi && e.tinh_trang === 'da_nghi') return 'da_nghi';
+  if (e.ngay_vao_lam) return e.ngay_vao_lam <= day ? 'dang_lam' : 'cho_vao_lam';
+  return e.tinh_trang === 'dang_lam' ? 'dang_lam' : 'cho_vao_lam';
+}
+const workingOn = (e, day) => !e.da_an && empState(e, day) === 'dang_lam';
+const waitingOn = (e, day) => !e.da_an && empState(e, day) === 'cho_vao_lam';
+
+// D-020 đủ 4 loại (bước 3.4): Đang làm > Chờ vào làm (内定承諾 hoặc ngày vào làm ở tương lai) > Đang ứng tuyển > Đã nghỉ.
+function lifecycleOf(personId) {
+  const today = todayJst();
+  const emps = (company.emps || []).filter((e) => e.person_id === personId && !e.da_an);
+  const mine = (company.apps || []).filter((a) => a.person_id === personId && !a.da_an).map((a) => a.trang_thai_hien_tai);
+  if (emps.some((e) => workingOn(e, today))) return 'dang_lam';
+  if (emps.some((e) => waitingOn(e, today)) || mine.indexOf('naitei_shodaku') >= 0) return 'cho_vao_lam';
+  if (mine.some((s) => ['da_gui', 'cho_pv', 'da_pv', 'naitei'].indexOf(s) >= 0)) return 'dang_ung_tuyen';
+  if (emps.length) return 'da_nghi';
+  return '';
+}
+
+// Tiến độ 1 đơn (D-006, D-021): đã vào làm = đang làm hôm nay; chờ vào làm = 内定承諾 + ngày vào làm ở tương lai;
+// còn thiếu = số cần − đã vào làm (chỉ tính khi đơn còn mở; đơn đã đóng không tự mở lại).
+function jobProgress(j) {
+  const today = todayJst();
+  const emps = (company.emps || []).filter((e) => e.job_id === j.id && !e.da_an);
+  const working = emps.filter((e) => workingOn(e, today)).length;
+  const waiting = emps.filter((e) => waitingOn(e, today)).length +
+    (company.apps || []).filter((a) => a.job_id === j.id && !a.da_an && a.trang_thai_hien_tai === 'naitei_shodaku').length;
+  const open = j.trang_thai_don === 'dang_mo';
+  return { working: working, waiting: waiting, missing: open ? Math.max(Number(j.so_luong_can || 0) - working, 0) : null, active: activeAppCount(j.id) };
+}
+
+function jobLabel(jobId) {
+  const j = (company.jobs || []).find((x) => x.id === jobId);
+  if (!j) return jobId;
+  const c = company.rows.find((x) => x.id === j.company_id);
+  return j.ma + ' · ' + j.vi_tri + ' · ' + (c ? c.ten_phap_nhan : '');
+}
+
+function applFail(msg, raw, formKey) {
+  appl.saving = false;
+  let field = validationField(raw);
+  if (field === 'ngay_vao_lam') field = 'ngay_hieu_luc'; // ô ngày hiệu lực = ngày vào làm khi chọn "Đã vào làm"
+  if (field && appl[formKey]) appl.fieldErr = { field: field, msg: msg }; else appl.error = msg;
+  if (msg === t('err.CONFLICT')) { appl.statusForm = null; reloadApps(); }
+  render();
+}
+
+function startAppl() { appl.saving = true; appl.error = null; appl.fieldErr = null; render(); }
+
+// ---- Giới thiệu vào đơn ----
+function openIntroForm(p) {
+  const rec = company.staff.find((s) => s.id === p.recruiter_staff_id && s.trang_thai === 'dang_lam' && !s.da_an);
+  appl.form = { personId: p.id, data: { job_id: '', ngay_gui: todayJst(), recruiter_staff_id: rec ? rec.id : '', ghi_chu: '' } };
+  appl.statusForm = null; appl.fieldErr = null; appl.error = null;
+  render();
+}
+
+function submitIntro() {
+  const f = appl.form;
+  const req = !f.data.job_id ? 'job_id' : !f.data.ngay_gui ? 'ngay_gui' : null;
+  if (req) { appl.fieldErr = { field: req, msg: fmt('val.required', { field: t('field.' + req) }) }; render(); return; }
+  startAppl();
+  runServer('createApplication', [Object.assign({ person_id: f.personId }, f.data)],
+    () => { appl.saving = false; appl.form = null; reloadApps(); },
+    (msg, raw) => applFail(msg, raw, 'form'));
+}
+
+function renderIntroForm() {
+  const f = appl.form;
+  const fe = appl.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.append(el('h3', null, t('app.newTitle')));
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitIntro(); });
+  const open = (company.jobs || []).filter((j) => !j.da_an && j.trang_thai_don === 'dang_mo').sort((a, b) => (a.ma < b.ma ? -1 : 1));
+  const jobField = companyInput(f, 'job_id', { required: true, wide: true, fe: fe, options: [['', t('app.chooseJob')]].concat(open.map((j) => [j.id, jobLabel(j.id)])) });
+  if (!open.length) jobField.append(el('span', 'muted', t('app.noOpenJob')));
+  const staff = staffOptions(idList(f.data.recruiter_staff_id)).map((o) => [o.id, o.text + (o.tag ? ' (' + o.tag + ')' : '')]);
+  form.append(jobField,
+    companyInput(f, 'ngay_gui', { required: true, type: 'date', fe: fe }),
+    companyInput(f, 'recruiter_staff_id', { fe: fe, options: [['', '—']].concat(staff) }),
+    companyInput(f, 'ghi_chu', { textarea: true, max: 2000, wide: true, fe: fe }));
+  form.append(formButtons(() => { appl.form = null; appl.fieldErr = null; render(); }));
+  wrap.append(form);
+  return wrap;
+}
+
+function formButtons(onCancel) {
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', appl.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = appl.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = appl.saving;
+  cancel.addEventListener('click', onCancel);
+  actions.append(save, cancel);
+  return actions;
+}
+
+// ---- Đổi trạng thái (ghi thêm 1 dòng lịch sử) ----
+function openStatusForm(a) {
+  appl.statusForm = { appId: a.id, ma: a.ma, sua_luc: a.sua_luc, data: { trang_thai: a.trang_thai_hien_tai, ngay_hieu_luc: todayJst(), ly_do: '' } };
+  appl.form = null; appl.fieldErr = null; appl.error = null;
+  render();
+}
+
+function submitStatus() {
+  const f = appl.statusForm;
+  if (CHOICES.appReasonRequired.indexOf(f.data.trang_thai) >= 0 && !f.data.ly_do.trim()) {
+    appl.fieldErr = { field: 'ly_do', msg: fmt('val.required', { field: t('field.ly_do') }) }; render(); return;
+  }
+  startAppl();
+  const done = () => { appl.saving = false; appl.statusForm = null; if (appl.historyId === f.appId) loadLogs(f.appId); reloadApps(); };
+  if (f.data.trang_thai === 'da_vao_lam') { // bước 3.4: kèm ngày vào làm → tạo bản ghi vào làm
+    runServer('startEmployment', [f.appId, f.data.ngay_hieu_luc, f.sua_luc],
+      (res) => { appl.jobFull = res.jobFull; reloadEmps(); done(); },
+      (msg, raw) => applFail(msg, raw, 'statusForm'));
+    return;
+  }
+  runServer('addApplicationStatus', [f.appId, f.data.trang_thai, f.data.ngay_hieu_luc, f.data.ly_do, f.sua_luc],
+    done, (msg, raw) => applFail(msg, raw, 'statusForm'));
+}
+
+function renderStatusForm() {
+  const f = appl.statusForm;
+  const fe = appl.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.append(el('h3', null, fmt('app.statusTitle', { ma: f.ma })));
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitStatus(); });
+  const statusField = companyInput(f, 'trang_thai', { fe: fe, options: CHOICES.appStatuses.map((s) => [s, t('app.status.' + s) + (CHOICES.appLocked.indexOf(s) >= 0 ? ' ' + t('app.lockedTag') : '')]) });
+  statusField.querySelectorAll('option').forEach((o) => { if (CHOICES.appLocked.indexOf(o.value) >= 0) o.disabled = true; });
+  const reason = companyInput(f, 'ly_do', { textarea: true, max: 500, wide: true, fe: fe });
+  reason.append(el('span', 'muted', t('app.reasonHint')));
+  const day = companyInput(f, 'ngay_hieu_luc', { required: true, type: 'date', fe: fe });
+  day.append(el('span', 'muted', t('app.startHint')));
+  form.append(statusField, day, reason);
+  form.append(formButtons(() => { appl.statusForm = null; appl.fieldErr = null; render(); }));
+  wrap.append(form);
+  return wrap;
+}
+
+// ---- Lịch sử + hủy dòng nhập nhầm ----
+function loadLogs(appId) {
+  appl.historyId = appId; appl.logs = null; appl.confirmCancel = null; iv.appId = null;
+  runServer('getApplicationLogs', [appId], (rows) => { appl.logs = rows; render(); }, (msg) => { appl.error = msg; render(); });
+}
+
+function renderHistory(a) {
+  const wrap = el('section', 'stack');
+  const bar = el('div', 'toolbar');
+  bar.append(el('h3', null, fmt('app.historyTitle', { ma: a.ma })));
+  const close = el('button', 'btn', t('app.closeHistory'));
+  close.type = 'button'; close.addEventListener('click', () => { appl.historyId = null; appl.logs = null; render(); });
+  bar.append(close);
+  wrap.append(bar);
+  if (!appl.logs) { wrap.append(el('div', 'muted', t('setup.loading'))); return wrap; }
+  const activeCount = appl.logs.filter((l) => !l.da_an).length;
+  const ul = el('ul', 'history');
+  appl.logs.forEach((l) => {
+    const li = el('li', l.da_an ? 'cancelled' : null);
+    li.append(el('span', 'nowrap', l.ngay_hieu_luc), el('strong', null, t('app.status.' + l.trang_thai)));
+    if (l.ly_do) li.append(el('span', null, '— ' + l.ly_do));
+    if (l.da_an) li.append(el('span', 'muted', '(' + t('app.cancelled') + ')'));
+    else if (activeCount > 1 && !a.da_an) {
+      const confirming = appl.confirmCancel === l.id;
+      const b = el('button', confirming ? 'btn small danger' : 'btn small', confirming ? t('app.confirmCancel') : t('app.cancelLine'));
+      b.type = 'button'; b.disabled = appl.saving;
+      b.addEventListener('click', () => {
+        if (!confirming) { appl.confirmCancel = l.id; render(); return; }
+        startAppl();
+        runServer('cancelApplicationStatus', [a.id, l.id, a.sua_luc],
+          () => { appl.saving = false; loadLogs(a.id); reloadApps(); },
+          (msg, raw) => applFail(msg, raw, 'none'));
+      });
+      li.append(b);
+    }
+    ul.append(li);
+  });
+  wrap.append(ul);
+  return wrap;
+}
+
+// 3.4 Q2 (b): đơn đã đủ người → gợi ý đổi sang "Đã đủ người"; chỉ đổi khi bấm.
+function renderJobFull() {
+  const j = appl.jobFull;
+  const box = el('div', 'confirm');
+  box.setAttribute('role', 'alert');
+  box.append(el('div', null, fmt('emp.jobFull', { ma: j.ma, working: j.working, need: j.need })));
+  const acts = el('div', 'row-actions');
+  const yes = el('button', 'btn-primary', appl.saving ? t('ui.saving') : t('emp.jobFullYes'));
+  yes.type = 'button'; yes.disabled = appl.saving;
+  yes.addEventListener('click', () => {
+    startAppl();
+    runServer('updateRecord', ['JOB_ORDER', j.id, { trang_thai_don: 'da_du' }, j.sua_luc],
+      () => { appl.saving = false; appl.jobFull = null; reloadJobs(); },
+      (msg, raw) => { appl.jobFull = null; applFail(msg, raw, 'none'); });
+  });
+  const no = el('button', 'btn', t('iv.suggestNo'));
+  no.type = 'button'; no.addEventListener('click', () => { appl.jobFull = null; render(); });
+  acts.append(yes, no);
+  box.append(acts);
+  return box;
+}
+
+// ---- Mục "Lần giới thiệu" trong hồ sơ người ----
+function renderPersonApps(p) {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'person-apps-h');
+  const bar = el('div', 'toolbar');
+  const h = el('h2', null, t('app.title')); h.id = 'person-apps-h';
+  const right = el('div', 'filters');
+  const showLabel = el('label', 'check');
+  const show = el('input'); show.type = 'checkbox'; show.checked = appl.showHidden;
+  show.addEventListener('change', () => { appl.showHidden = show.checked; render(); });
+  showLabel.append(show, document.createTextNode(t('staff.showHidden')));
+  const canIntro = p.trang_thai_sang_loc === 'san_sang' && !p.da_an;
+  const add = el('button', 'btn-primary', t('app.add'));
+  add.type = 'button'; add.disabled = !canIntro || appl.saving || !!appl.form;
+  add.addEventListener('click', () => openIntroForm(p));
+  right.append(showLabel, add);
+  bar.append(h, right);
+  box.append(bar);
+  if (!canIntro) box.append(el('div', 'muted', t('app.notReadyHint')));
+  if (appl.jobFull) box.append(renderJobFull());
+  if (appl.form && appl.form.personId === p.id) box.append(renderIntroForm());
+  if (appl.error) box.append(el('div', 'msg-err', appl.error));
+
+  const list = (company.apps || []).filter((a) => a.person_id === p.id && (appl.showHidden || !a.da_an))
+    .sort((a, b) => (a.ma < b.ma ? 1 : -1)); // mới nhất lên đầu
+  if (!list.length) { box.append(el('div', 'muted', t('app.empty'))); return box; }
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['staff.col.ma', 'field.job_id', 'field.ngay_gui', 'app.col.status', 'field.recruiter_staff_id', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+  list.forEach((a) => {
+    const tr = el('tr', a.da_an ? 'hidden-row' : null);
+    const st = cell(3, t('app.status.' + a.trang_thai_hien_tai));
+    st.append(el('div', 'muted', a.ngay_trang_thai));
+    if (a.da_an) st.append(el('span', 'muted', ' (' + t('staff.hiddenTag') + ')'));
+    const acts = el('div', 'row-actions');
+    const change = el('button', 'btn', t('app.changeStatus'));
+    change.type = 'button'; change.disabled = appl.saving || !!a.da_an;
+    change.setAttribute('aria-label', t('app.changeStatus') + ' ' + a.ma);
+    change.addEventListener('click', () => openStatusForm(a));
+    const hist = el('button', 'btn', t('app.history'));
+    hist.type = 'button'; hist.setAttribute('aria-label', t('app.history') + ' ' + a.ma);
+    hist.addEventListener('click', () => loadLogs(a.id));
+    const toggle = el('button', 'btn', a.da_an ? t('staff.unhide') : t('staff.hide'));
+    toggle.type = 'button'; toggle.disabled = appl.saving;
+    toggle.setAttribute('aria-label', (a.da_an ? t('staff.unhide') : t('staff.hide')) + ' ' + a.ma);
+    toggle.addEventListener('click', () => {
+      startAppl();
+      runServer('setHidden', ['APPLICATION', a.id, !a.da_an, a.sua_luc],
+        () => { appl.saving = false; reloadApps(); }, (msg, raw) => applFail(msg, raw, 'none'));
+    });
+    const ivBtn = el('button', 'btn', t('iv.button'));
+    ivBtn.type = 'button'; ivBtn.setAttribute('aria-label', t('iv.button') + ' ' + a.ma);
+    ivBtn.addEventListener('click', () => openInterviews(a));
+    acts.append(change, ivBtn, hist, toggle);
+    const actCell = cell(5, null); actCell.append(acts);
+    tr.append(cell(0, a.ma), cell(1, jobLabel(a.job_id)), cell(2, a.ngay_gui), st,
+      cell(4, a.recruiter_staff_id ? staffLabel(a.recruiter_staff_id) : ''), actCell);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  box.append(wrap);
+  const current = list.find((a) => appl.statusForm && a.id === appl.statusForm.appId);
+  if (current) box.append(renderStatusForm());
+  const ivApp = list.find((a) => a.id === iv.appId);
+  if (ivApp) box.append(renderInterviews(ivApp));
+  const histApp = list.find((a) => a.id === appl.historyId);
+  if (histApp) box.append(renderHistory(histApp));
+  return box;
+}
+</script>

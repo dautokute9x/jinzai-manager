@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <base target="_top">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap">
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #F4F5F7; color: #17212B; font-family: 'Be Vietnam Pro', 'Noto Sans JP', system-ui, sans-serif; font-size: 14px; line-height: 1.45; }
+      button { font: inherit; cursor: pointer; }
+      .upgrade-box[hidden] { display: none; }
+      .who { margin-left: auto; margin-right: 12px; font-size: 13px; }
+      #nav button[hidden] { display: none; }
+      .inline-field { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; }
+      .upgrade-box { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 12px; margin-bottom: 12px; border: 1px solid #F3D9B1; border-radius: 8px; background: #FEF3E2; }
+      .banner { background: #FEF3E2; color: #6B3A06; padding: 8px 16px; font-size: 13px; font-weight: 500; border-bottom: 1px solid #F3D9B1; }
+      .topbar { display: flex; align-items: center; gap: 8px; padding: 6px 16px 6px 8px; background: #FFFFFF; border-bottom: 1px solid #E1E4E8; }
+      .menu-btn { width: 44px; height: 44px; border: 0; background: transparent; border-radius: 8px; display: none; align-items: center; justify-content: center; }
+      .menu-btn:hover { background: #EEF0F3; }
+      .brand { font-size: 18px; font-weight: 700; color: #0D5560; flex: 1; padding-left: 8px; }
+      .lang { display: flex; }
+      .lang button { min-height: 36px; min-width: 52px; padding: 0 10px; border: 1px solid #C9CED4; background: #FFFFFF; color: #2B3640; font-weight: 600; }
+      .lang button:first-child { border-radius: 8px 0 0 8px; }
+      .lang button:last-child { border-radius: 0 8px 8px 0; border-left: 0; }
+      .lang button[aria-pressed="true"] { background: #0D5560; border-color: #0D5560; color: #FFFFFF; }
+      .layout { display: flex; min-height: calc(100vh - 92px); }
+      nav { width: 232px; flex: none; background: #FFFFFF; border-right: 1px solid #E1E4E8; padding: 16px 12px; display: flex; flex-direction: column; gap: 2px; }
+      nav button { display: flex; align-items: center; min-height: 44px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: #2B3640; font-weight: 500; text-align: left; }
+      nav button:hover { background: #EEF0F3; color: #17212B; }
+      nav button[aria-current="page"] { background: #E3F1F3; color: #0D5560; font-weight: 600; }
+      main { flex: 1; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+      h1 { margin: 0; font-size: 24px; font-weight: 700; }
+      h2 { margin: 0; font-size: 16px; font-weight: 600; }
+      .card { background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px; padding: 20px; }
+      .muted { color: #56616C; font-size: 12.5px; }
+      footer { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+      .stack { display: flex; flex-direction: column; gap: 12px; }
+      .btn-primary { align-self: flex-start; min-height: 44px; padding: 0 18px; border: 0; border-radius: 8px; background: #0D5560; color: #FFFFFF; font-weight: 600; }
+      .btn-primary:disabled { background: #8AA9AE; cursor: wait; }
+      .msg-ok { color: #1D6B3E; } .msg-warn { color: #8A4B08; } .msg-err { color: #9F1D1D; }
+      .links { margin: 0; padding-left: 18px; }
+      #pageBody > * + * { margin-top: 24px; padding-top: 20px; border-top: 1px solid #EEF0F3; }
+      .table-wrap { overflow-x: auto; container-type: inline-size; }
+      table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+      th { text-align: left; font-weight: 600; color: #56616C; font-size: 12px; padding: 8px 10px; border-bottom: 1px solid #E1E4E8; white-space: nowrap; }
+      td { padding: 8px 10px; border-bottom: 1px solid #EEF0F3; white-space: nowrap; }
+      tr.hidden-row td { color: #8A939C; }
+      tr.done-row td { background: #F1F8F4; }
+      .stack.tight { gap: 4px; }
+      .pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+      td.wrap { white-space: normal; min-width: 220px; }
+      tr.warn-row td { background: #FFF6E5; }
+      .bars { display: grid; gap: 6px; max-width: 640px; }
+      .bar-row { display: grid; grid-template-columns: 64px 1fr 110px; gap: 8px; align-items: center; font-size: 13px; }
+      .bar-row.funnel { grid-template-columns: 150px 1fr 150px; }
+      .bar-track { position: relative; height: 14px; background: #EEF0F3; border-radius: 4px; }
+      .bar-fill { height: 100%; background: #0D5560; border-radius: 4px; }
+      .bar-fill.neg { background: #B42318; }
+      .bar-target { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #C77700; }
+      .split-edit .filters { flex-wrap: nowrap; }
+      .num-input.money { width: 130px; }
+      .ref-comment { min-height: 60px; border: 1px solid #C9CED4; padding: 8px; }
+      @media print { .no-print { display: none !important; } }
+      .invoice-sheet { background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 8px; padding: 24px; display: grid; gap: 14px; color: #17212B; }
+      .inv-top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; }
+      .inv-title { font-size: 22px; font-weight: 700; letter-spacing: 0.2em; }
+      .inv-to { font-size: 16px; font-weight: 600; border-bottom: 1px solid #17212B; padding: 6px 0 2px; }
+      .inv-from { display: grid; gap: 2px; text-align: right; font-size: 13px; }
+      .inv-total { font-size: 18px; font-weight: 700; border: 2px solid #17212B; padding: 8px 12px; justify-self: start; }
+      .inv-lines, .inv-sum { border-collapse: collapse; width: 100%; }
+      .inv-lines th, .inv-lines td, .inv-sum th, .inv-sum td { border: 1px solid #C9CED4; padding: 6px 8px; white-space: normal; }
+      .inv-sum { width: auto; justify-self: end; }
+      td.num { text-align: right; white-space: nowrap; }
+      @media print {
+        body * { visibility: hidden; }
+        .print-area, .print-area * { visibility: visible; }
+        .print-area { position: absolute; left: 0; top: 0; width: 100%; border: 0; }
+      }
+      .file-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+      .upload-btn { position: relative; display: inline-flex; align-items: center; cursor: pointer; align-self: flex-start; }
+      .upload-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+      .upload-btn:focus-within { outline: 2px solid #0D5560; outline-offset: 2px; }
+      .btn { min-height: 36px; padding: 0 12px; border: 1px solid #C9CED4; border-radius: 8px; background: #FFFFFF; color: #17212B; font-weight: 600; }
+      .row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+      .row-actions .btn { white-space: nowrap; }
+      .btn.small { min-height: 30px; padding: 0 10px; font-size: 12.5px; font-weight: 500; }
+      .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+      .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; padding: 16px; background: #F7F8FA; border-radius: 8px; }
+      .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: #56616C; }
+      .field input, .field select { min-height: 40px; border: 1px solid #C9CED4; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 14px; font-weight: 400; color: #17212B; background: #FFFFFF; }
+      .form-actions { display: flex; gap: 8px; align-items: flex-end; }
+      .confirm { display: flex; flex-direction: column; gap: 12px; padding: 16px; background: #F7F8FA; border-radius: 8px; white-space: normal; } /* hộp xác nhận: chữ xuống dòng, nút nằm dưới */
+      .form-actions > button { align-self: auto; min-height: 40px; } /* Lưu và Hủy cùng cao, thẳng hàng với ô nhập */
+      .form .wide { grid-column: 1 / -1; }
+      fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
+      fieldset.field legend { padding: 0; margin-bottom: 4px; }
+      .field textarea { min-height: 72px; border: 1px solid #C9CED4; border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; font-weight: 400; color: #17212B; background: #FFFFFF; resize: vertical; }
+      .field [aria-invalid="true"] { border-color: #9F1D1D; }
+      .field-err { color: #9F1D1D; font-weight: 500; }
+      .check-list { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+      .check { display: flex; align-items: center; gap: 6px; min-height: 36px; font-size: 14px; font-weight: 400; color: #17212B; }
+      .check input { width: 18px; height: 18px; margin: 0; }
+      .filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+      .filters input, .filters select { min-height: 40px; border: 1px solid #C9CED4; border-radius: 8px; padding: 0 10px; font: inherit; background: #FFFFFF; color: #17212B; }
+      .filters input[type="search"] { min-width: 220px; }
+      td .muted { white-space: normal; }
+      .stack > .btn { align-self: flex-start; } /* nút phụ không kéo giãn hết chiều ngang */
+      .readonly { min-height: 40px; display: flex; align-items: center; font-size: 14px; font-weight: 500; color: #17212B; }
+      .mono { font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: 0.04em; }
+      .history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+      .history li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 0; border-bottom: 1px solid #EEF0F3; }
+      .history li.cancelled > :not(button):not(.muted) { text-decoration: line-through; color: #8A939C; }
+      .btn.danger { border-color: #9F1D1D; color: #9F1D1D; }
+      .badge-dd { font-weight: 600; color: #0D5560; }
+      .tabs { display: flex; gap: 4px; border-bottom: 1px solid #E1E4E8; flex-wrap: wrap; }
+      .tab { border: 0; background: none; padding: 10px 14px; font-weight: 600; color: #56616C; border-bottom: 3px solid transparent; min-height: 44px; }
+      .tab[aria-selected="true"] { color: #0D5560; border-bottom-color: #0D5560; }
+      .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; }
+      .panel { border: 1px solid #E1E4E8; border-radius: 10px; padding: 16px; }
+      .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+      .kpi { border: 1px solid #E1E4E8; border-radius: 8px; padding: 10px 12px; background: #F7F8FA; text-align: left; font: inherit; color: #17212B; }
+      button.kpi { cursor: pointer; border-color: #9CC5CB; }
+      button.kpi:hover { background: #E3F1F3; }
+      .kpi-num { font-size: 26px; font-weight: 700; line-height: 1.2; color: #0D5560; }
+      .kpis.small .kpi-num { font-size: 20px; }
+      .kpi-label { font-size: 12.5px; color: #56616C; }
+      .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; align-items: start; }
+      .col { background: #F7F8FA; border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+      .pl-card { text-align: left; font: inherit; background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 2px; color: #17212B; }
+      .pl-card:hover { border-color: #0D5560; }
+      .tasks li.overdue { background: #FDF2F2; }
+      .num-input, .cell-input { width: 90px; min-height: 36px; border: 1px solid #C9CED4; border-radius: 8px; padding: 0 8px; font: inherit; background: #FFFFFF; color: #17212B; }
+      .cell-input { width: 100%; min-width: 120px; max-width: 260px; }
+      h3 { margin: 0; font-size: 15px; font-weight: 600; }
+      .link-btn { border: 0; background: none; padding: 0; color: #0D5560; font-weight: 600; text-align: left; text-decoration: underline; text-underline-offset: 2px; min-height: 24px; white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+      .badge { display: inline-block; margin-left: 6px; padding: 0 8px; border-radius: 999px; background: #E3F1F3; color: #0D5560; font-size: 12px; font-weight: 600; }
+      .info { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 8px 16px; margin: 0; }
+      .info dt { color: #56616C; font-size: 12.5px; font-weight: 600; }
+      .info dd { margin: 0; white-space: pre-wrap; }
+      table.cards td { white-space: normal; min-width: 72px; } /* chữ dài xuống dòng thay vì tràn ngang */
+      table.cards td:first-child, table.cards td.nowrap { white-space: nowrap; min-width: 0; }
+      /* Bảng dạng thẻ khi khung chứa bảng hẹp (điện thoại, hoặc cửa sổ máy tính thu nhỏ): mỗi dòng một thẻ,
+         nhãn cột đứng trước giá trị — để không phải kéo ngang và không bị khuất cột Thao tác. */
+      @container (max-width: 900px) {
+        table.cards thead { display: none; }
+        table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; width: 100%; }
+        table.cards tr { border: 1px solid #E1E4E8; border-radius: 10px; padding: 6px 0; margin-bottom: 10px; }
+        table.cards td { display: flow-root; border: 0; padding: 5px 12px 5px 128px; white-space: normal; min-width: 0; }
+        table.cards td::before { content: attr(data-label); float: left; width: 104px; margin-left: -116px; color: #56616C; font-size: 12px; font-weight: 600; }
+      }
+      @container (max-width: 1100px) { /* bảng nhiều cột (đơn tuyển, con người) cần khung rộng hơn */
+        table.cards.many thead { display: none; }
+        table.cards.many, table.cards.many tbody, table.cards.many tr, table.cards.many td { display: block; width: 100%; }
+        table.cards.many tr { border: 1px solid #E1E4E8; border-radius: 10px; padding: 6px 0; margin-bottom: 10px; }
+        table.cards.many td { display: flow-root; border: 0; padding: 5px 12px 5px 128px; white-space: normal; min-width: 0; }
+        table.cards.many td::before { content: attr(data-label); float: left; width: 104px; margin-left: -116px; color: #56616C; font-size: 12px; font-weight: 600; }
+      }
+      :focus-visible { outline: 2px solid #0D5560; outline-offset: 2px; }
+      @media (max-width: 767px) {
+        .menu-btn { display: flex; }
+        .layout { display: block; }
+        nav { display: none; width: auto; border-right: 0; border-bottom: 1px solid #E1E4E8; }
+        nav.open { display: flex; }
+        main { padding: 16px; }
+        .filters, .filters input[type="search"], .filters select { width: 100%; min-width: 0; }
+      }
+    </style>
+  </head>
+  <body data-token="<?= token ?>" data-role="<?= role ?>" data-who="<?= who ?>" data-perms="<?= perms ?>" data-env="<?= env ?>">
+    <? if (env !== 'PROD') { ?><div class="banner" data-i18n="ui.banner"></div><? } ?>
+    <header class="topbar">
+      <button type="button" class="menu-btn" id="menuBtn" aria-controls="nav" aria-expanded="false" data-i18n-label="ui.menu">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#17212B" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+      </button>
+      <div class="brand"><?= appName ?></div>
+      <div class="who muted" id="whoBox" hidden></div>
+      <div class="lang" role="group" data-i18n-label="ui.lang">
+        <button type="button" data-lang="vi" aria-pressed="true">VI</button>
+        <button type="button" data-lang="ja" aria-pressed="false">日本語</button>
+      </div>
+    </header>
+    <div class="layout">
+      <nav id="nav" aria-label="Menu">
+        <button type="button" data-page="home" data-i18n="nav.home"></button>
+        <button type="button" data-page="company" data-i18n="nav.company"></button>
+        <button type="button" data-page="jobs" data-i18n="nav.jobs"></button>
+        <button type="button" data-page="person" data-i18n="nav.person"></button>
+        <button type="button" data-page="prep" data-i18n="nav.prep"></button>
+        <button type="button" data-page="visa" data-i18n="nav.visa"></button>
+        <button type="button" data-page="docs" data-i18n="nav.docs"></button>
+        <button type="button" data-page="working" data-i18n="nav.working"></button>
+        <button type="button" data-page="mendan" data-i18n="nav.mendan"></button>
+        <button type="button" data-page="incident" data-i18n="nav.incident"></button>
+        <button type="button" data-page="sales" data-i18n="nav.sales"></button>
+        <button type="button" data-page="invoice" data-i18n="nav.invoice"></button>
+        <button type="button" data-page="settings" data-i18n="nav.settings"></button>
+      </nav>
+      <main>
+        <h1 id="pageTitle"></h1>
+        <div id="upgradeBox" class="msg-warn upgrade-box" hidden></div>
+        <div class="card" id="pageBody"></div>
+        <footer class="muted">
+          <span><span data-i18n="ui.now"></span>: <strong id="clock"></strong></span>
+          <span><span data-i18n="ui.version"></span>: <?= version ?></span>
+        </footer>
+      </main>
+    </div>
+
+    <?!= include('I18n'); ?>
+    <?!= include('Staff'); ?>
+    <?!= include('BackupUi'); ?>
+    <?!= include('PerfUi'); ?>
+    <?!= include('Company'); ?>
+    <?!= include('Lookup'); ?>
+    <?!= include('Contact'); ?>
+    <?!= include('Jobs'); ?>
+    <?!= include('PersonUi'); ?>
+    <?!= include('ApplicationUi'); ?>
+    <?!= include('InterviewUi'); ?>
+    <?!= include('EmploymentUi'); ?>
+    <?!= include('DashboardUi'); ?>
+    <?!= include('VisaUi'); ?>
+    <?!= include('WorkingUi'); ?>
+    <?!= include('SupportUi'); ?>
+    <?!= include('FinanceUi'); ?>
+    <?!= include('SalesUi'); ?>
+    <?!= include('InvoiceUi'); ?>
+    <?!= include('ImportUi'); ?>
+    <?!= include('XlsxUi'); ?>
+    <?!= include('LegacyUi'); ?>
+    <?!= include('DocsUi'); ?>
+    <?!= include('PrepUi'); ?>
+    <?!= include('MendanUi'); ?>
+    <script>
+      const CHOICES = <?!= choices ?>;
+      const LANG_KEY = 'hrTokutei.lang';
+      let lang = 'vi';
+      let page = 'home';
+
+      // D-033: nhớ ngôn ngữ theo trình duyệt. Trình duyệt chặn lưu trữ thì vẫn chạy, chỉ không nhớ.
+      try { if (I18N[localStorage.getItem(LANG_KEY)]) lang = localStorage.getItem(LANG_KEY); } catch (e) {}
+
+      const t = (key) => I18N[lang][key] || I18N.vi[key] || key;
+
+      function render() {
+        document.documentElement.lang = lang;
+        document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+        document.querySelectorAll('[data-i18n-label]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nLabel)); });
+        document.querySelectorAll('[data-lang]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.lang === lang)));
+        document.querySelectorAll('[data-page]').forEach((b) => {
+          if (b.dataset.page === page) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+        });
+        document.getElementById('pageTitle').textContent = t('nav.' + page);
+        if (page === 'settings') renderSettings();
+        else if (page === 'home') renderHome();
+        else if (page === 'company') renderCompanyPage();
+        else if (page === 'jobs') renderJobsPage();
+        else if (page === 'person') renderPersonPage();
+        else if (page === 'visa') renderVisaPage();
+        else if (page === 'prep') renderPrepPage();
+        else if (page === 'docs') renderDocsPage();
+        else if (page === 'working') renderWorkingPage();
+        else if (page === 'mendan') renderMendanPage();
+        else if (page === 'incident') renderIncidentPage();
+        else if (page === 'sales') renderSalesPage();
+        else if (page === 'invoice') renderInvoicePage();
+        else document.getElementById('pageBody').textContent = t('soon.' + page);
+      }
+
+      // ---- Trang Cài đặt: khởi tạo dữ liệu thử nghiệm (bước 1.3) ----
+      let setup = { busy: false, status: null, result: null, error: null };
+      const fmt = (key, vars) => Object.keys(vars).reduce((s, k) => s.replace('{' + k + '}', vars[k]), t(key));
+      const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+      // Mã lỗi từ server (Setup.gs, Repo.gs) → câu dễ hiểu theo ngôn ngữ đang chọn.
+      function errorText(err) {
+        const msg = String((err && err.message) || err);
+        let m = msg.match(/MISSING_FILE\|(.+)$/);
+        if (m) return fmt('setup.err.missing', { name: m[1] });
+        m = msg.match(/VALIDATION\|(\{.*\})/);
+        if (m) { const v = JSON.parse(m[1]); return fmt('val.' + v.code, { field: t('field.' + v.field), max: v.max, min: v.min, ma: v.ma }); }
+        m = msg.match(/SCHEMA_MISMATCH\|(\w+)/);
+        if (m) return fmt('err.schema', { table: m[1] });
+        m = msg.match(/\b(CONFLICT|NOT_FOUND|NOT_INITIALIZED|BACKUP_INCOMPLETE|FORBIDDEN|DEMO_DONE|DEMO_TEST_ONLY|PERF_TEST_ONLY|BUSY|XLSX_UNSUPPORTED|XLSX_BAD)\b/);
+        if (m) return t('err.' + m[1]);
+        return fmt('setup.err.other', { msg: msg });
+      }
+
+      // GĐ 10 (D-075): mở bằng liên kết riêng (?k=…) → mọi lần gọi đi qua api(token, …); chủ mở trực tiếp thì gọi thẳng.
+      // Template chưa thay (chạy ngoài Apps Script) → coi như chủ.
+      const ACCESS = (() => {
+        const d = document.body.dataset;
+        const clean = (v) => (/<\?/.test(v || '') ? '' : v || '');
+        let perms = null;
+        try { perms = JSON.parse(clean(d.perms) || 'null'); } catch (e) { perms = null; }
+        return { token: clean(d.token), role: clean(d.role) || 'owner', who: clean(d.who), perms: perms };
+      })();
+      const isOwnerUi = ACCESS.role === 'owner';
+      // D-077: quyền theo bảng phân quyền (máy chủ vẫn kiểm lại ở mọi lần gọi). Chủ: tất cả.
+      const can = (p) => isOwnerUi || !!(ACCESS.perms && ACCESS.perms[p]);
+
+      // Gọi hàm server; ngoài Apps Script (không có google.script.run) thì báo lỗi thay vì treo.
+      function runServer(fn, args, onOk, onErr) {
+        if (!(window.google && google.script && google.script.run)) { onErr(errorText('google.script.run unavailable')); return; }
+        const r = google.script.run.withSuccessHandler(onOk).withFailureHandler((e) => onErr(errorText(e), e));
+        if (ACCESS.token) r.api(ACCESS.token, fn, args); else r[fn].apply(null, args);
+      }
+
+      function callServer(fn, onOk) {
+        runServer(fn, [],
+          (res) => { setup.busy = false; setup.error = null; onOk(res); render(); },
+          (msg) => { setup.busy = false; setup.error = msg; render(); });
+      }
+
+      function loadStatus() {
+        setup.busy = true;
+        callServer('getSetupStatus', (res) => { setup.status = res; if (res.initialized) { loadStaff(); loadLookup(); loadTaskSettings(); loadChecklistTemplates(); loadPreTemplates(); loadFinance(); loadImportFields(); loadPermissions(); loadBackup(); } });
+      }
+
+      function runInit() {
+        setup.busy = true; setup.result = null; render();
+        callServer('initTestData', (res) => { setup.status = res; setup.result = res; if (typeof showUpgrade === 'function') showUpgrade(res); if (res.initialized) { loadStaff(); loadLookup(); loadTaskSettings(); loadChecklistTemplates(); loadPreTemplates(); loadFinance(); loadImportFields(); loadPermissions(); loadBackup(); } });
+      }
+
+      function renderSettings() {
+        const body = document.getElementById('pageBody');
+        body.replaceChildren();
+        if (!isOwnerUi) { // người dùng liên kết: chỉ các mục mình có quyền (không khởi tạo / sao lưu / đo tốc độ / phân quyền)
+          if (can('cai_dat')) body.append(renderStaff(), renderLookup(), renderTaskSettings(), renderChecklistSettings(), renderPreTemplateSettings(), renderFinanceSettings());
+          if (can('nhap_xuat')) body.append(renderImport(), renderExport());
+          return;
+        }
+        const box = el('div', 'stack');
+        box.append(el('h2', null, t('setup.title')), el('div', 'muted', t('setup.desc')));
+        const s = setup.status;
+        if (setup.busy && !s) box.append(el('div', 'muted', t('setup.loading')));
+        if (s) {
+          box.append(el('div', s.initialized ? 'msg-ok' : null, s.initialized ? fmt('setup.ready', { v: s.schemaVersion }) : t('setup.notYet')));
+          if (s.items.length) {
+            const ul = el('ul', 'links');
+            s.items.forEach((it) => { const a = el('a', null, it.name); a.href = it.url; a.target = '_blank'; a.rel = 'noopener'; const li = el('li'); li.append(a); ul.append(li); });
+            box.append(ul);
+          }
+        }
+        const r = setup.result;
+        if (r) box.append(el('div', 'msg-ok', r.created.length ? fmt('setup.added', { list: r.created.join(', ') }) : t('setup.nothing')));
+        if (r && r.protectedCount) box.append(el('div', 'msg-ok', fmt('setup.protected', { n: r.protectedCount })));
+        if (r && r.upgraded && r.upgraded.length) box.append(el('div', 'msg-ok', fmt('setup.upgraded', { list: r.upgraded.join(', '), key: r.safetyBackup })));
+        if (r && r.seeded) box.append(el('div', 'msg-ok', fmt('setup.seeded', { n: r.seeded })));
+        if (r && r.warnings.length) box.append(el('div', 'msg-warn', fmt('setup.headerWarn', { list: r.warnings.join(', ') })));
+        if (setup.error) box.append(el('div', 'msg-err', setup.error));
+        const btn = el('button', 'btn-primary', setup.busy ? t('setup.running') : t('setup.btn'));
+        btn.type = 'button'; btn.disabled = setup.busy; btn.addEventListener('click', runInit);
+        if (isOwnerUi) box.append(btn); // GĐ 10: chỉ chủ khởi tạo / nâng cấp
+        body.append(box);
+        if (s && s.initialized) body.append(renderStaff(), renderLookup(), renderTaskSettings(), renderChecklistSettings(), renderPreTemplateSettings(), renderFinanceSettings(), renderLegacy(), renderImport(), renderExport());
+        if (s && s.initialized) body.append(renderPermissions(), renderBackup());
+        if (s && s.initialized && document.body.dataset.env !== 'PROD') body.append(renderPerf(), renderDemo()); // chỉ bản thử nghiệm
+      }
+
+      function setMenu(open) {
+        document.getElementById('nav').classList.toggle('open', open);
+        document.getElementById('menuBtn').setAttribute('aria-expanded', String(open));
+      }
+
+      document.querySelectorAll('[data-lang]').forEach((b) => b.addEventListener('click', () => {
+        lang = b.dataset.lang;
+        try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
+        render();
+      }));
+      document.querySelectorAll('[data-page]').forEach((b) => b.addEventListener('click', () => {
+        page = b.dataset.page;
+        setMenu(false);
+        render();
+        if (page === 'settings' && isOwnerUi && !setup.status && !setup.busy) loadStatus();
+        if (page === 'settings' && !isOwnerUi && !setup.loadedLinked) {
+          setup.loadedLinked = true;
+          if (can('cai_dat')) { loadStaff(); loadLookup(); loadTaskSettings(); loadChecklistTemplates(); loadPreTemplates(); loadFinance(); }
+          if (can('nhap_xuat')) loadImportFields();
+        }
+        if (page === 'home') { loadDashboard(); render(); }
+        if (page === 'working') loadWorking();
+        if (page === 'sales') { sales.form = null; loadSalesPage(); render(); }
+        if (page === 'invoice') { inv.detailId = null; inv.creating = null; loadInvoicePage(); render(); }
+        if (page === 'visa') { visa.form = null; visa.docsFor = null; visa.docEdits = {}; loadVisa(); render(); }
+        if (page === 'prep') { prep.form = null; prep.detailId = null; loadPrep(); render(); }
+        if (page === 'docs') { loadMissingDocs(); render(); }
+        if (page === 'mendan') { mendan.form = null; loadMendan(); render(); }
+        if (page === 'incident') { inc.form = null; inc.detailId = null; inc.logForm = null; loadIncidents(); render(); }
+        if (page === 'person') { person.form = null; person.detailId = null; person.dups = null; loadPeople(); render(); }
+        if (page === 'company' || page === 'jobs') { company.form = null; company.detailId = null; contact.form = null; job.form = null; loadCompany(); render(); }
+      }));
+      document.getElementById('menuBtn').addEventListener('click', () => {
+        setMenu(!document.getElementById('nav').classList.contains('open'));
+      });
+
+      const clockFmt = { timeZone: 'Asia/Tokyo', hour12: false }; // D-014: luôn hiển thị giờ Nhật
+      function tick() { document.getElementById('clock').textContent = new Date().toLocaleString('sv-SE', clockFmt); }
+      tick();
+      setInterval(tick, 1000);
+      render();
+      loadDashboard(); // trang mở đầu là Tổng quan
+      // Code mới cần cấu trúc mới (SCHEMA) mà file Sheets chưa nâng cấp → nhắc bấm Khởi tạo ngay khi mở app, trên mọi trang.
+      const SCHEMA = Number('<?= schema ?>') || 0;
+      function showUpgrade(s) {
+        const box = document.getElementById('upgradeBox');
+        const need = SCHEMA && s && s.initialized && Number(s.schemaVersion || 0) < SCHEMA;
+        box.hidden = !need;
+        if (!need) return;
+        box.replaceChildren(el('span', null, fmt('ui.needUpgrade', { have: s.schemaVersion || '?', want: SCHEMA })));
+        const go = el('button', 'btn-primary', t('ui.goUpgrade'));
+        go.type = 'button';
+        go.addEventListener('click', () => { page = 'settings'; render(); if (!setup.busy) runInit(); window.scrollTo(0, 0); });
+        box.append(go);
+      }
+      if (isOwnerUi) runServer('getSetupStatus', [], showUpgrade, () => {}); // chỉ chủ nâng cấp được
+      // GĐ 10: nhân viên không thấy Doanh số / Hóa đơn / Cài đặt; hiện tên người đang dùng liên kết.
+      const hideNav = { sales: !(can('doanh_so') || can('doanh_so_minh')), invoice: !can('hoa_don'), settings: !(can('cai_dat') || can('nhap_xuat')) };
+      Object.keys(hideNav).forEach((p) => { const b = document.querySelector('[data-page="' + p + '"]'); if (b) b.hidden = hideNav[p]; });
+      if (ACCESS.who) { const w = document.getElementById('whoBox'); w.hidden = false; w.textContent = ACCESS.who + ' · ' + t('role.' + ACCESS.role); }
+      // Bước 1.6: thời gian từ lúc khung app bắt đầu tải tới khi hiển thị xong (không gồm khung ngoài của Google).
+      const appLoadMs = Math.round(performance.now());
+    </script>
+  </body>
+</html>

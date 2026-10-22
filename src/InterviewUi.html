@@ -1,0 +1,205 @@
+<script>
+// Bước 3.3: Phỏng vấn trong từng lần giới thiệu + "Lịch phỏng vấn sắp tới" ở trang công ty (D-055).
+// Dùng t(), fmt(), el(), render(), runServer(), CHOICES của Index.html; companyInput(), validationField() của Company.html;
+// appl, reloadApps(), startAppl() của ApplicationUi.html.
+let iv = { appId: null, list: null, contacts: [], form: null, fieldErr: null, saving: false, error: null, suggest: null, upcoming: null };
+
+function ivTime(r) { return r.thoi_gian + (r.gio_ket_thuc ? '–' + r.gio_ket_thuc : ''); }
+
+function openInterviews(a) {
+  iv.appId = a.id; iv.list = null; iv.form = null; iv.error = null; iv.suggest = null;
+  appl.historyId = null; appl.statusForm = null;
+  render();
+  loadInterviews(a.id);
+}
+
+function loadInterviews(appId) {
+  runServer('listInterviews', [appId],
+    (res) => { iv.list = res.interviews; iv.contacts = res.contacts; render(); },
+    (msg) => { iv.error = msg; render(); });
+}
+
+function openIvForm(row) {
+  const parts = row ? row.thoi_gian.split(' ') : [todayJst(), ''];
+  iv.form = { id: row ? row.id : '', ma: row ? row.ma : '', sua_luc: row ? row.sua_luc : '', data: {
+    vong: row ? row.vong : 'v1', ngay: parts[0], gio_bat_dau: parts[1] || '', gio_ket_thuc: row ? row.gio_ket_thuc : '',
+    hinh_thuc: row ? row.hinh_thuc : '', dia_diem: row ? row.dia_diem : '', nguoi_pv_contact_id: row ? row.nguoi_pv_contact_id : '',
+    ket_qua: row ? row.ket_qua : 'cho', ly_do: row ? row.ly_do : '', ghi_chu: row ? row.ghi_chu : '' } };
+  iv.fieldErr = null; iv.error = null; iv.suggest = null;
+  render();
+}
+
+function submitIv() {
+  const f = iv.form;
+  const d = f.data;
+  const req = !d.ngay ? 'ngay' : !d.gio_bat_dau ? 'gio_bat_dau' : (d.ket_qua === 'truot' && !d.ly_do.trim()) ? 'ly_do' : null;
+  if (req) { iv.fieldErr = { field: req, msg: fmt('val.required', { field: t('field.' + req) }) }; render(); return; }
+  const data = { vong: d.vong, thoi_gian: d.ngay + ' ' + d.gio_bat_dau, gio_ket_thuc: d.gio_ket_thuc, hinh_thuc: d.hinh_thuc, dia_diem: d.dia_diem,
+    nguoi_pv_contact_id: d.nguoi_pv_contact_id, ket_qua: d.ket_qua, ly_do: d.ly_do, ghi_chu: d.ghi_chu };
+  if (!f.id) data.application_id = iv.appId;
+  iv.saving = true; iv.error = null; iv.fieldErr = null; render();
+  runServer('saveInterview', [f.id, data, f.sua_luc],
+    (res) => {
+      iv.saving = false; iv.form = null;
+      if (res.suggest) iv.suggest = Object.assign({ appId: res.app.id, appMa: res.app.ma, suaLuc: res.app.sua_luc }, res.suggest);
+      loadInterviews(iv.appId);
+    },
+    (msg, raw) => {
+      iv.saving = false;
+      let field = validationField(raw);
+      if (field === 'thoi_gian') field = 'ngay'; // máy chủ kiểm tra ngày + giờ gộp; hiện lỗi ở ô ngày
+      if (field && field !== 'application_id') iv.fieldErr = { field: field, msg: msg }; else iv.error = msg;
+      if (msg === t('err.CONFLICT')) { iv.form = null; loadInterviews(iv.appId); }
+      render();
+    });
+}
+
+function renderIvForm(ended) {
+  const f = iv.form;
+  const fe = iv.fieldErr;
+  const wrap = el('section', 'stack');
+  wrap.append(el('h3', null, f.id ? fmt('iv.editTitle', { ma: f.ma }) : t('iv.newTitle')));
+  const form = el('form', 'form');
+  form.noValidate = true;
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitIv(); });
+  const codes = (list, prefix, blank) => (blank ? [['', '—']] : []).concat(list.map((c) => [c, t(prefix + c)]));
+  const contacts = iv.contacts.filter((c) => !c.da_an || c.id === f.data.nguoi_pv_contact_id)
+    .map((c) => [c.id, c.ho_ten + (c.chuc_vu ? ' · ' + c.chuc_vu : '') + (c.da_an ? ' (' + t('staff.hiddenTag') + ')' : '')]);
+  const reason = companyInput(f, 'ly_do', { textarea: true, max: 500, wide: true, fe: fe });
+  reason.append(el('span', 'muted', t('iv.reasonHint')));
+  form.append(
+    companyInput(f, 'vong', { required: true, fe: fe, options: codes(CHOICES.ivRounds, 'iv.round.') }),
+    companyInput(f, 'ngay', { required: true, type: 'date', fe: fe }),
+    companyInput(f, 'gio_bat_dau', { required: true, type: 'time', fe: fe }),
+    companyInput(f, 'gio_ket_thuc', { type: 'time', fe: fe }),
+    companyInput(f, 'hinh_thuc', { fe: fe, options: codes(CHOICES.ivForms, 'iv.form.', true) }),
+    companyInput(f, 'dia_diem', { max: 300, fe: fe }),
+    companyInput(f, 'nguoi_pv_contact_id', { fe: fe, options: [['', '—']].concat(contacts) }),
+    companyInput(f, 'ket_qua', { fe: fe, options: codes(CHOICES.ivResults, 'iv.result.') }),
+    reason,
+    companyInput(f, 'ghi_chu', { textarea: true, max: 2000, wide: true, fe: fe }));
+  const actions = el('div', 'form-actions wide');
+  const save = el('button', 'btn-primary', iv.saving ? t('ui.saving') : t('staff.save'));
+  save.type = 'submit'; save.disabled = iv.saving;
+  const cancel = el('button', 'btn', t('staff.cancel'));
+  cancel.type = 'button'; cancel.disabled = iv.saving;
+  cancel.addEventListener('click', () => { iv.form = null; iv.fieldErr = null; render(); });
+  actions.append(save, cancel);
+  form.append(actions);
+  wrap.append(form);
+  return wrap;
+}
+
+// 3.3 Q2 (c): gợi ý 1 chạm — chỉ đổi trạng thái lần giới thiệu khi bấm "Cập nhật".
+function renderSuggest() {
+  const s = iv.suggest;
+  const box = el('div', 'confirm');
+  box.setAttribute('role', 'alert');
+  box.append(el('div', null, fmt('iv.suggest', { ma: s.appMa, status: t('app.status.' + s.status), date: s.date })));
+  const acts = el('div', 'row-actions');
+  const yes = el('button', 'btn-primary', iv.saving ? t('ui.saving') : t('iv.suggestYes'));
+  yes.type = 'button'; yes.disabled = iv.saving;
+  yes.addEventListener('click', () => {
+    iv.saving = true; render();
+    runServer('addApplicationStatus', [s.appId, s.status, s.date, s.reason, s.suaLuc],
+      () => { iv.saving = false; iv.suggest = null; reloadApps(); },
+      (msg) => { iv.saving = false; iv.suggest = null; iv.error = msg; reloadApps(); render(); });
+  });
+  const no = el('button', 'btn', t('iv.suggestNo'));
+  no.type = 'button'; no.addEventListener('click', () => { iv.suggest = null; render(); });
+  acts.append(yes, no);
+  box.append(acts);
+  return box;
+}
+
+function renderInterviews(a) {
+  const ended = CHOICES.appEnded.indexOf(a.trang_thai_hien_tai) >= 0 || !!a.da_an;
+  const wrap = el('section', 'stack');
+  wrap.setAttribute('aria-labelledby', 'iv-h');
+  const bar = el('div', 'toolbar');
+  const h = el('h3', null, fmt('iv.title', { ma: a.ma })); h.id = 'iv-h';
+  const right = el('div', 'row-actions');
+  const add = el('button', 'btn-primary', t('iv.add'));
+  add.type = 'button'; add.disabled = ended || iv.saving || !!iv.form || !iv.list;
+  add.addEventListener('click', () => openIvForm(null));
+  const close = el('button', 'btn', t('app.closeHistory'));
+  close.type = 'button'; close.addEventListener('click', () => { iv.appId = null; iv.form = null; iv.suggest = null; render(); });
+  right.append(add, close);
+  bar.append(h, right);
+  wrap.append(bar);
+  if (ended) wrap.append(el('div', 'muted', t('iv.endedHint')));
+  if (iv.suggest && iv.suggest.appId === a.id) wrap.append(renderSuggest());
+  if (iv.form) wrap.append(renderIvForm(ended));
+  if (iv.error) wrap.append(el('div', 'msg-err', iv.error));
+  if (!iv.list) { wrap.append(el('div', 'muted', t('setup.loading'))); return wrap; }
+  if (!iv.list.length) { wrap.append(el('div', 'muted', t('iv.empty'))); return wrap; }
+  const tw = el('div', 'table-wrap');
+  const table = el('table', 'cards');
+  const cols = ['staff.col.ma', 'field.vong', 'iv.col.time', 'field.hinh_thuc', 'field.dia_diem', 'field.nguoi_pv_contact_id', 'field.ket_qua', 'staff.col.actions'];
+  const head = el('tr');
+  cols.forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  const cell = (i, text) => { const td = el('td', null, text); td.dataset.label = t(cols[i]); return td; };
+  iv.list.forEach((r) => {
+    const tr = el('tr', r.da_an ? 'hidden-row' : null);
+    const res = cell(6, t('iv.result.' + r.ket_qua));
+    if (r.ly_do) res.append(el('div', 'muted', r.ly_do));
+    if (r.da_an) res.append(el('span', 'muted', ' (' + t('staff.hiddenTag') + ')'));
+    const contact = iv.contacts.find((c) => c.id === r.nguoi_pv_contact_id);
+    const time = cell(2, ivTime(r)); time.classList.add('nowrap');
+    const acts = el('div', 'row-actions');
+    const edit = el('button', 'btn', t('staff.edit'));
+    edit.type = 'button'; edit.disabled = iv.saving || !!iv.form;
+    edit.setAttribute('aria-label', t('staff.edit') + ' ' + r.ma);
+    edit.addEventListener('click', () => openIvForm(r));
+    const toggle = el('button', 'btn', r.da_an ? t('staff.unhide') : t('staff.hide'));
+    toggle.type = 'button'; toggle.disabled = iv.saving;
+    toggle.setAttribute('aria-label', (r.da_an ? t('staff.unhide') : t('staff.hide')) + ' ' + r.ma);
+    toggle.addEventListener('click', () => {
+      iv.saving = true; render();
+      runServer('setHidden', ['INTERVIEW', r.id, !r.da_an, r.sua_luc],
+        () => { iv.saving = false; loadInterviews(a.id); },
+        (msg) => { iv.saving = false; iv.error = msg; loadInterviews(a.id); });
+    });
+    acts.append(edit, toggle);
+    const actCell = cell(7, null); actCell.append(acts);
+    tr.append(cell(0, r.ma), cell(1, t('iv.round.' + r.vong)), time, cell(3, r.hinh_thuc ? t('iv.form.' + r.hinh_thuc) : ''),
+      cell(4, r.dia_diem), cell(5, contact ? contact.ho_ten : ''), res, actCell);
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  tw.append(table);
+  wrap.append(tw);
+  return wrap;
+}
+
+// ---- Trang chi tiết công ty: lịch phỏng vấn sắp tới ----
+function loadUpcoming(companyId) {
+  iv.upcoming = null;
+  runServer('getUpcomingInterviews', [companyId], (rows) => { iv.upcoming = rows; render(); }, (msg) => { iv.upcoming = { error: msg }; render(); });
+}
+
+function renderUpcoming() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'upcoming-h');
+  const h = el('h2', null, t('iv.upcoming')); h.id = 'upcoming-h';
+  box.append(h);
+  const u = iv.upcoming;
+  if (!u) { box.append(el('div', 'muted', t('setup.loading'))); return box; }
+  if (u.error) { box.append(el('div', 'msg-err', u.error)); return box; }
+  if (!u.length) { box.append(el('div', 'muted', t('iv.noUpcoming'))); return box; }
+  const ul = el('ul', 'history');
+  u.forEach((r) => {
+    const li = el('li');
+    li.append(el('strong', 'nowrap', ivTime(r)), el('span', null, t('iv.round.' + r.vong)));
+    const who = el('button', 'link-btn', r.person_ma + ' · ' + r.person_name);
+    who.type = 'button';
+    who.addEventListener('click', () => { page = 'person'; person.form = null; loadPeople(); openPerson(r.person_id); });
+    li.append(who, el('span', 'muted', r.job_ma + ' · ' + r.vi_tri + (r.hinh_thuc ? ' · ' + t('iv.form.' + r.hinh_thuc) : '') + (r.dia_diem ? ' · ' + r.dia_diem : '')));
+    ul.append(li);
+  });
+  box.append(ul);
+  return box;
+}
+</script>

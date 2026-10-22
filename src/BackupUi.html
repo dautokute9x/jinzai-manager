@@ -1,0 +1,102 @@
+<script>
+// Bước 1.5: khu vực Sao lưu trong trang Cài đặt (D-017, D-040).
+// Dùng t(), fmt(), el(), render(), runServer(), loadStaff() của các file khác.
+let backup = { status: null, busy: false, error: null, notice: null, confirmKey: null };
+
+function loadBackup() {
+  runServer('getBackupStatus', [],
+    (s) => { backup.status = s; render(); },
+    (msg) => { backup.error = msg; render(); });
+}
+
+function backupAction(fn, args, onOk) {
+  backup.busy = true; backup.error = null; backup.notice = null; render();
+  runServer(fn, args,
+    (res) => { backup.busy = false; onOk(res); render(); },
+    (msg) => { backup.busy = false; backup.error = msg; render(); });
+}
+
+function renderBackupList(s) {
+  if (!s.backups.length) return el('div', 'muted', t('backup.empty'));
+  const wrap = el('div', 'table-wrap');
+  const table = el('table');
+  const head = el('tr');
+  ['backup.col.date', 'backup.col.time', 'backup.col.kind', 'backup.col.state', 'staff.col.actions'].forEach((k) => head.append(el('th', null, t(k))));
+  const thead = el('thead'); thead.append(head);
+  const tbody = el('tbody');
+  s.backups.forEach((b) => {
+    const tr = el('tr');
+    const restore = el('button', 'btn', t('backup.restore'));
+    restore.type = 'button';
+    restore.disabled = backup.busy || !b.complete;
+    restore.addEventListener('click', () => { backup.confirmKey = b.key; render(); });
+    const act = el('td'); act.append(restore);
+    tr.append(el('td', null, b.date), el('td', null, b.time), el('td', null, t('backup.kind.' + b.kind)),
+      el('td', b.complete ? null : 'msg-warn', t(b.complete ? 'backup.complete' : 'backup.incomplete')), act);
+    tbody.append(tr);
+    if (backup.confirmKey === b.key) {
+      const row = el('tr');
+      const cell = el('td');
+      cell.colSpan = 5;
+      const box = el('div', 'confirm');
+      box.append(el('div', null, fmt('backup.confirm', { date: b.date, time: b.time })));
+      const actions = el('div', 'form-actions');
+      const yes = el('button', 'btn-primary', backup.busy ? t('setup.running') : t('backup.confirmYes'));
+      yes.type = 'button'; yes.disabled = backup.busy;
+      yes.addEventListener('click', () => backupAction('restoreBackup', [b.key], (res) => {
+        backup.confirmKey = null;
+        backup.status = res.status;
+        backup.notice = fmt('backup.restored', { key: res.restoredFrom, safety: res.safetyBackup });
+        loadStaff();
+      }));
+      const no = el('button', 'btn', t('staff.cancel'));
+      no.type = 'button'; no.addEventListener('click', () => { backup.confirmKey = null; render(); });
+      actions.append(yes, no);
+      box.append(actions);
+      cell.append(box); row.append(cell); tbody.append(row);
+    }
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  return wrap;
+}
+
+function renderBackup() {
+  const box = el('section', 'stack');
+  box.setAttribute('aria-labelledby', 'backup-h');
+  const h = el('h2', null, t('backup.title')); h.id = 'backup-h';
+  box.append(h, el('div', 'muted', t('backup.desc')));
+  const s = backup.status;
+  if (!s) {
+    box.append(backup.error ? el('div', 'msg-err', backup.error) : el('div', 'muted', t('setup.loading')));
+    return box;
+  }
+  if (s.lastError) box.append(el('div', 'msg-err', fmt('backup.lastError', { at: s.lastError.at, msg: s.lastError.msg })));
+  if (s.stale) box.append(el('div', 'msg-err', s.lastOk ? fmt('backup.stale', { at: s.lastOk }) : t('backup.none')));
+  box.append(el('div', s.autoEnabled ? 'msg-ok' : 'msg-warn', t(s.autoEnabled ? 'backup.autoOn' : 'backup.autoOff')));
+  if (s.lastOk) box.append(el('div', 'muted', fmt('backup.lastOk', { at: s.lastOk })));
+  if (s.lastRun) box.append(el('div', 'muted', fmt('backup.lastRun', { at: s.lastRun })));
+
+  const bar = el('div', 'toolbar');
+  const left = el('div', 'row-actions');
+  if (!s.autoEnabled) {
+    const on = el('button', 'btn-primary', t('backup.enable'));
+    on.type = 'button'; on.disabled = backup.busy;
+    on.addEventListener('click', () => backupAction('enableAutoBackup', [], (res) => { backup.status = res; }));
+    left.append(on);
+  }
+  const now = el('button', s.autoEnabled ? 'btn-primary' : 'btn', backup.busy ? t('setup.running') : t('backup.now'));
+  now.type = 'button'; now.disabled = backup.busy;
+  now.addEventListener('click', () => backupAction('backupNow', [], (res) => { backup.status = res; backup.notice = t('backup.done'); }));
+  left.append(now);
+  const link = el('a', null, t('backup.openFolder'));
+  link.href = s.folderUrl; link.target = '_blank'; link.rel = 'noopener';
+  bar.append(left, link);
+  box.append(bar);
+
+  if (backup.notice) box.append(el('div', 'msg-ok', backup.notice));
+  if (backup.error) box.append(el('div', 'msg-err', backup.error));
+  box.append(renderBackupList(s));
+  return box;
+}
+</script>
